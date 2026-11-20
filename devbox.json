@@ -13,7 +13,8 @@
     "dosfstools",
     "gdb",
     "iputils",
-    "tcpdump"
+    "tcpdump",
+    "gh"
   ],
   "shell": {
     "init_hook": [
