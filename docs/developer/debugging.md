@@ -116,6 +116,18 @@ Common causes:
 **Cause**: Paging structures don't map currently executing code
 **Solution**: Ensure low memory (0x0 - 0x200000) is identity mapped
 
+### Layout-sensitive failures (boot stack corrupting `.text`, fixed 2026-04-22)
+**Symptoms**: Tests pass/fail depending on cosmetic code changes, `-O` level, or an unused helper. Failing test is whichever function lands near the stack area (~0xEF78 / end of `.text`).
+**Cause**: 16->32 bit transition in `src/boot/kmain.s` never set ESP. 16-bit stack was SS=0x8000:SP=0xF000 (linear 0x8F000). After PE=1 and flat SS reload, ESP=0x0000F000, inside kernel `.text`. Small GDT flat-data descriptor had granularity byte 0x8F (B=0), so stack ops used 16-bit SP. Every 32-bit push (PIC init, IDT fill, paging setup, long-mode probe) wrote into kernel code; e.g. `call sh_print` in `cmd_thread_ls` went from `e8 83 e3 ff ff` to `e8 83 e3 ff 00`.
+**Solution** (`src/boot/kmain.s`):
+1. Small GDT flat-data granularity 0x8F -> 0xCF (B=1, stack ops use ESP).
+2. First instruction at `kernel32:`: `mov esp, 0x80000`.
+GDT64 is not involved; it loads only after LME is set.
+**Diagnosis recipe** (tooling not committed):
+- If canaries on kernel stack, user stack, saved RIP/RSP and `.text` are clean but tests still fail, the damage happened before 64-bit code ran. Snapshot kernel memory right after boot and `cmp` against `kernel.bin`.
+- `-d int,cpu_reset,guest_errors,in_asm`: a TB retranslation means its bytes changed under it.
+- ELF build for GDB: remove `OUTPUT_FORMAT(binary)` from `src/link.ld`, add `objcopy -O binary` to `src/Makefile`, `-g` to CFLAGS. Attach via `-gdb tcp::1234 -S`, watchpoint the suspect address, break on `shell_execute_command`, `dump memory` between commands, `cmp -l` snapshots.
+
 ## GDB Commands
 
 ```gdb
