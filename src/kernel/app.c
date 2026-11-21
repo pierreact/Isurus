@@ -194,10 +194,22 @@ int app_launch(const char *manifest_path) {
             kprint(" already in use\n");
             return -1;
         }
+        // core_to_app is filled only after all checks, so it cannot
+        // catch a core listed twice in the same manifest.
+        for (uint32 j = 0; j < i; j++) {
+            if (manifest.cores[j] == c) {
+                kprint("APP: core ");
+                kprint_dec(c);
+                kprint(" listed twice\n");
+                return -1;
+            }
+        }
     }
 
-    // Check NIC conflicts
-    memset(app->nic_locked, 0, sizeof(app->nic_locked));
+    // Check NIC conflicts. Collected locally: the slot is zeroed below
+    // before it is filled, so writing app->nic_locked here would be lost.
+    uint8 nic_locked[MAX_NICS];
+    memset(nic_locked, 0, sizeof(nic_locked));
     for (uint32 i = 0; i < manifest.core_count; i++) {
         uint32 nic = thread_meta[manifest.cores[i]].nic_index;
         if (nic == NIC_NONE) continue;
@@ -211,7 +223,7 @@ int app_launch(const char *manifest_path) {
                 return -1;
             }
         }
-        app->nic_locked[nic] = 1;
+        nic_locked[nic] = 1;
     }
 
     // Validate IP configuration (per-core or per-numa).
@@ -307,6 +319,7 @@ int app_launch(const char *manifest_path) {
 
     // Fill slot (zero first to avoid stale data from previous use or uninitialized BSS)
     memset(app, 0, sizeof(AppSlot));
+    memcpy(app->nic_locked, nic_locked, sizeof(app->nic_locked));
     for (int i = 0; i < APP_NAME_LEN - 1 && manifest.name[i]; i++)
         app->name[i] = manifest.name[i];
     app->load_addr = load_addr;

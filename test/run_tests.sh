@@ -289,6 +289,20 @@ send_cmd "sys.proc.run /CONF/DEMO_APP.INI" 5
 check "Demo app ran"      "APP: demo_app finished"
 check "Demo app NIC info" "MAC"
 
+# Test: NIC lock between apps. Mode is per-numa here, so cores 2 and 3
+# (NUMA node 1) share one NIC. niclk_a (dpdk_l2, ~1 s) holds it while
+# niclk_b is launched without waiting.
+send_cmd "sys.proc.run /CONF/NICLK_A.INI" 0
+send_cmd "sys.proc.run /CONF/NICLK_B.INI" 5
+check "NIC lock refuses second app" "APP: NIC [0-9]* already locked"
+check_absent "Second app not loaded"   "APP: niclk_b loaded"
+check "First app finished"             "APP: niclk_a finished"
+
+# Test: a core listed twice in a manifest is refused.
+send_cmd "sys.proc.run /CONF/DUPCORE.INI" 3
+check "Duplicate core refused" "APP: core 1 listed twice"
+check_absent "Duplicate-core app not loaded" "APP: dupcore loaded"
+
 # Test: Data directory on ISO
 send_cmd "sys.fs.ls /data"
 check "PCI IDs file on ISO" "PCI"
