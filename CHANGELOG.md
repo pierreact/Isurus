@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-11-21] - App launch: NIC lock and duplicate cores
+
+### Fixed
+- app_launch set the slot's nic_locked[] during the NIC conflict check, then zeroed the whole slot with memset before filling it, so no NIC was ever locked. A second app on a core sharing the NIC (per-numa mode: cores 2 and 3 on node 1) was loaded while the first ran. The locks are now collected in a local array and copied into the slot after the memset.
+- app_launch accepted a core listed twice in a manifest (cores=1,1): core_to_app is filled only after validation. Such manifests are now refused with "APP: core N listed twice".
+
+### Added
+- conf/niclk_a.ini, conf/niclk_b.ini, conf/dupcore.ini: test manifests.
+- Tests: second app on a locked NIC refused and not loaded, first app still finishes; duplicate core refused and not loaded.
+
 ## [2026-11-21] - kmalloc multi-page spans
 
 ### Fixed
