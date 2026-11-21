@@ -38,6 +38,16 @@ malloc allocates a minimum of 4KB (one page). All allocations are multiples of 4
 
 Trade-off: wastes memory on small allocations. Acceptable for a kernel where most allocations are page-sized anyway (page tables, buffers, per-CPU structures).
 
+### Page allocator (alloc_pages)
+
+`alloc_pages(n)` (`src/kernel/mem.c`) is a bump allocator for long-lived memory: stacks, page tables, DMA rings and buffers, packet pools.
+
+- Range: from `PAGING_LOCATION_END` (end of the boot page tables) up to a limit set in `init_memmgr`: the end of the usable E820 entry that contains the start, capped at `APP_LOAD_BASE` (0x2000000, app images). Before `init_memmgr` runs the limit is 0 and every call fails.
+- Never freed. Call it only for allocations made once (boot, first use of a per-core resource), never per operation. Per-operation buffers are static or allocated once and reused (examples: AHCI DMA bounce buffer, iso9660 sector buffer, per-AP user stacks via `ap_user_stack_get`).
+- **Can fail: returns 0** when the request does not fit below the limit, and prints `MEM: alloc_pages(n pages) failed`. Every caller must check for 0 before use and fail its own operation: return an error, skip the device, leave the AP offline, refuse the app launch. Only callers with no possible fallback halt (BSP stack, LAPIC/IOAPIC mapping, shell task).
+- Pages taken before a failure in the same operation are not returned (bump allocator).
+- `map_mmio_range` allocates page-table pages through it, so it can fail too: returns -1, callers check.
+
 ## Execution model
 
 This document describes both single-node and cluster deployments.

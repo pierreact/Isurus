@@ -27,7 +27,9 @@ BSP (kmalloc/kfree, kernel + BSP ring 3 only):
 - Pack small objects into one page; never many sub-page kmallocs
 - Need >4 KB: pass the real size; never loop kmalloc(4096) (blocks not adjacent)
 - kfree takes the exact pointer kmalloc returned, frees the whole span
-- Long-lived DMA / paging / per-AP stacks: alloc_pages (src/kernel/mem.c, bump allocator)
+- Long-lived DMA / paging / per-AP stacks: alloc_pages (src/kernel/mem.c, bump allocator, never freed)
+- alloc_pages only for one-time allocations (boot, first use of a per-core resource); never per read, per launch or per request: use a static or once-allocated buffer
+- alloc_pages returns 0 when out of range: every caller checks and fails its operation (docs/developer/architecture.md "Page allocator")
 
 AP ring-3 threads:
 - No malloc; sys_kmalloc forbidden from AP context

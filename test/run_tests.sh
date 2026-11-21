@@ -303,6 +303,29 @@ send_cmd "sys.proc.run /CONF/DUPCORE.INI" 3
 check "Duplicate core refused" "APP: core 1 listed twice"
 check_absent "Duplicate-core app not loaded" "APP: dupcore loaded"
 
+# Test: no alloc_pages leak per launch or file read. Cores 1-3 already
+# have their user stacks from the apps above, so the bump pointer
+# ("Paging structures end") must not move.
+paging_end_last() {
+    grep -a "Paging structures end" "$SERIAL_LOG" | tail -1 | awk '{print $1}'
+}
+send_cmd "sys.mem.info"
+PE_BEFORE=$(paging_end_last)
+for _ in 1 2 3; do
+    send_cmd "sys.proc.run /CONF/DEMO_APP.INI" 3
+done
+send_cmd "sys.fs.ls /bin"
+send_cmd "sys.mem.info"
+PE_AFTER=$(paging_end_last)
+echo "  [alloc_pages bump pointer: $PE_BEFORE -> $PE_AFTER]"
+if [ -n "$PE_BEFORE" ] && [ "$PE_BEFORE" = "$PE_AFTER" ]; then
+    echo "  PASS: No alloc_pages leak across 3 launches"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: No alloc_pages leak across 3 launches ($PE_BEFORE -> $PE_AFTER)"
+    FAIL=$((FAIL + 1))
+fi
+
 # Test: Data directory on ISO
 send_cmd "sys.fs.ls /data"
 check "PCI IDs file on ISO" "PCI"

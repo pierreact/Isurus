@@ -11,6 +11,9 @@
 extern uint64 ap_user_stacks[MAX_CPUS];
 extern uint64 ap_entry_addrs[MAX_CPUS];
 
+// Per-AP user stack, allocated once on first use. 0 if out of memory.
+uint64 ap_user_stack_get(uint32 cpu_idx);
+
 // AP ring 3 launcher (called on AP via ap_dispatch, does not return)
 uint64 ap_run_ring3(uint64 cpu_idx);
 

@@ -34,6 +34,10 @@ static uint32 root_lba = 0;            // root directory LBA
 static uint32 root_size = 0;           // root directory size in bytes
 static char volume_id[PVD_VOLUME_ID_LEN + 1];
 
+// One-sector scratch buffer for the PVD, directory sectors and the
+// partial last sector of a file read. BSP-only, not reentrant.
+static uint8 sector_buf[ISO_SECTOR_SIZE];
+
 // Read ISO sectors into buf via AHCI
 static int read_sectors(uint64 lba, uint32 count, void *buf) {
     return ahci_read_sectors(mount_dev, lba, count, buf);
@@ -80,52 +84,73 @@ static int name_match(const char *iso_name, uint8 iso_len,
     return 1;
 }
 
+// Called for each directory record except "." and "..".
+// Return non-zero to stop the walk.
+typedef int (*dir_visit_fn)(const uint8 *rec, void *ctx);
+
+// Walk a directory extent one sector at a time through sector_buf.
+// ISO 9660 directory records never cross a sector boundary (a zero
+// length byte pads the rest of the sector), so one sector is enough.
+// Returns 1 if fn stopped the walk, 0 at the end, -1 on read error.
+static int dir_walk(uint32 dir_lba, uint32 dir_size, dir_visit_fn fn, void *ctx) {
+    uint32 sectors = (dir_size + ISO_SECTOR_SIZE - 1) / ISO_SECTOR_SIZE;
+
+    for (uint32 s = 0; s < sectors; s++) {
+        if (read_sectors(dir_lba + s, 1, sector_buf) != 0)
+            return -1;
+
+        uint32 limit = dir_size - s * ISO_SECTOR_SIZE;
+        if (limit > ISO_SECTOR_SIZE) limit = ISO_SECTOR_SIZE;
+
+        uint32 offset = 0;
+        while (offset < limit) {
+            uint8 rec_len = sector_buf[offset];
+            if (rec_len == 0) break;                        // sector padding
+            if (rec_len < 34 || offset + rec_len > limit) break;  // malformed
+            uint8 name_len = sector_buf[offset + 32];
+            if (33 + (uint32)name_len > rec_len) break;     // malformed
+
+            const uint8 *rec = &sector_buf[offset];
+            // Skip "." and ".." entries (name_len == 1, name = 0x00 or 0x01)
+            int dot = name_len == 1 && (rec[33] == 0 || rec[33] == 1);
+            if (!dot && fn(rec, ctx))
+                return 1;
+
+            offset += rec_len;
+        }
+    }
+    return 0;
+}
+
+typedef struct {
+    const char *name;
+    uint32 lba, size;
+    uint8 flags;
+} FindCtx;
+
+static int find_visit(const uint8 *rec, void *ctx) {
+    FindCtx *f = (FindCtx *)ctx;
+    if (!name_match((const char *)&rec[33], rec[32], f->name))
+        return 0;
+    f->lba = *(const uint32 *)&rec[2];
+    f->size = *(const uint32 *)&rec[10];
+    f->flags = rec[25];
+    return 1;
+}
+
 // Find a directory entry by name in a directory extent.
 // Returns the entry's LBA and size via out params.
 // Returns 0 on success, -1 if not found.
 static int find_entry(uint32 dir_lba, uint32 dir_size,
                       const char *name,
                       uint32 *out_lba, uint32 *out_size, uint8 *out_flags) {
-    uint32 sectors = (dir_size + ISO_SECTOR_SIZE - 1) / ISO_SECTOR_SIZE;
-    uint8 *buf = (uint8 *)alloc_pages((sectors * ISO_SECTOR_SIZE + 4095) / 4096);
-
-    if (read_sectors(dir_lba, sectors, buf) != 0)
+    FindCtx f = { name, 0, 0, 0 };
+    if (dir_walk(dir_lba, dir_size, find_visit, &f) != 1)
         return -1;
-
-    uint32 offset = 0;
-    while (offset < dir_size) {
-        uint8 rec_len = buf[offset];
-        if (rec_len == 0) {
-            // Skip to next sector boundary
-            uint32 next_sector = ((offset / ISO_SECTOR_SIZE) + 1) * ISO_SECTOR_SIZE;
-            if (next_sector >= dir_size) break;
-            offset = next_sector;
-            continue;
-        }
-
-        uint8 name_len = buf[offset + 32];
-        char *entry_name = (char *)&buf[offset + 33];
-        uint32 entry_lba = *(uint32 *)&buf[offset + 2];
-        uint32 entry_size = *(uint32 *)&buf[offset + 10];
-        uint8 flags = buf[offset + 25];
-
-        // Skip "." and ".." entries (name_len == 1, name = 0x00 or 0x01)
-        if (name_len == 1 && (entry_name[0] == 0 || entry_name[0] == 1)) {
-            offset += rec_len;
-            continue;
-        }
-
-        if (name_match(entry_name, name_len, name)) {
-            *out_lba = entry_lba;
-            *out_size = entry_size;
-            *out_flags = flags;
-            return 0;
-        }
-
-        offset += rec_len;
-    }
-
-    return -1;
+    *out_lba = f.lba;
+    *out_size = f.size;
+    *out_flags = f.flags;
+    return 0;
 }
 
 // Walk a path like "/bin/demo_app" by splitting on '/' and resolving
@@ -181,7 +206,7 @@ static int resolve_path(const char *path, uint32 *out_lba,
 int iso9660_mount(uint32 ahci_dev_idx) {
     mount_dev = ahci_dev_idx;
 
-    uint8 *pvd = (uint8 *)alloc_pages(1);
+    uint8 *pvd = sector_buf;
     if (read_pvd(pvd) != 0) {
         kprint("ISO9660: PVD read failed\n");
         return -1;
@@ -216,6 +241,27 @@ int iso9660_mounted(void) {
     return mounted;
 }
 
+static int ls_visit(const uint8 *rec, void *ctx) {
+    (void)ctx;
+    uint8 name_len = rec[32];
+    const char *entry_name = (const char *)&rec[33];
+
+    if (rec[25] & DIR_FLAG_DIRECTORY)
+        kprint("[DIR]  ");
+    else {
+        kprint_dec(*(const uint32 *)&rec[10]);
+        kprint("  ");
+    }
+
+    // Print name (strip ";1" version suffix)
+    for (uint8 i = 0; i < name_len; i++) {
+        if (entry_name[i] == ';') break;
+        putc(entry_name[i]);
+    }
+    putc('\n');
+    return 0;
+}
+
 void iso9660_ls(const char *path) {
     if (!mounted) {
         kprint("ISO9660: not mounted\n");
@@ -235,52 +281,8 @@ void iso9660_ls(const char *path) {
         return;
     }
 
-    uint32 sectors = (dir_size + ISO_SECTOR_SIZE - 1) / ISO_SECTOR_SIZE;
-    uint8 *buf = (uint8 *)alloc_pages((sectors * ISO_SECTOR_SIZE + 4095) / 4096);
-
-    if (read_sectors(dir_lba, sectors, buf) != 0) {
+    if (dir_walk(dir_lba, dir_size, ls_visit, 0) < 0)
         kprint("ISO9660: read error\n");
-        return;
-    }
-
-    uint32 offset = 0;
-    while (offset < dir_size) {
-        uint8 rec_len = buf[offset];
-        if (rec_len == 0) {
-            uint32 next_sector = ((offset / ISO_SECTOR_SIZE) + 1) * ISO_SECTOR_SIZE;
-            if (next_sector >= dir_size) break;
-            offset = next_sector;
-            continue;
-        }
-
-        uint8 name_len = buf[offset + 32];
-        char *entry_name = (char *)&buf[offset + 33];
-        uint32 entry_size = *(uint32 *)&buf[offset + 10];
-        uint8 flags = buf[offset + 25];
-
-        // Skip "." and ".."
-        if (name_len == 1 && (entry_name[0] == 0 || entry_name[0] == 1)) {
-            offset += rec_len;
-            continue;
-        }
-
-        // Print entry
-        if (flags & DIR_FLAG_DIRECTORY)
-            kprint("[DIR]  ");
-        else {
-            kprint_dec(entry_size);
-            kprint("  ");
-        }
-
-        // Print name (strip ";1" version suffix)
-        for (uint8 i = 0; i < name_len; i++) {
-            if (entry_name[i] == ';') break;
-            putc(entry_name[i]);
-        }
-        putc('\n');
-
-        offset += rec_len;
-    }
 }
 
 uint32 iso9660_file_size(const char *path) {
@@ -303,15 +305,19 @@ int iso9660_read_file(const char *path, void *buf, uint32 max_size) {
     uint32 to_read = file_size;
     if (to_read > max_size) to_read = max_size;
 
-    uint32 sectors = (to_read + ISO_SECTOR_SIZE - 1) / ISO_SECTOR_SIZE;
+    // Whole sectors go straight to the caller's buffer; only the partial
+    // last sector goes through sector_buf, so nothing past to_read is
+    // written into buf.
+    uint32 full = to_read / ISO_SECTOR_SIZE;
+    uint32 tail = to_read % ISO_SECTOR_SIZE;
 
-    // Read into a sector-aligned temp buffer then copy
-    uint32 pages = (sectors * ISO_SECTOR_SIZE + 4095) / 4096;
-    uint8 *tmp = (uint8 *)alloc_pages(pages);
-
-    if (read_sectors(file_lba, sectors, tmp) != 0)
+    if (full > 0 && read_sectors(file_lba, full, buf) != 0)
         return -1;
 
-    memcpy(buf, tmp, to_read);
+    if (tail > 0) {
+        if (read_sectors(file_lba + full, 1, sector_buf) != 0)
+            return -1;
+        memcpy((uint8 *)buf + (uint64)full * ISO_SECTOR_SIZE, sector_buf, tail);
+    }
     return (int)to_read;
 }

@@ -89,6 +89,10 @@ int virtio_net_init(VirtioNetDevice *dev, const PCIDevice *pci) {
     uint32 tx_pages = (VIRTIO_NET_TX_BUFFERS * VIRTIO_NET_BUF_SIZE + 4095) / 4096;
     dev->rx_buffers = (uint8 *)alloc_pages(rx_pages);
     dev->tx_buffers = (uint8 *)alloc_pages(tx_pages);
+    if (!dev->rx_buffers || !dev->tx_buffers) {
+        kprint("VIRTIO-NET: no memory for RX/TX buffers\n");
+        return -1;
+    }
 
     memset(dev->rx_buffers, 0, rx_pages * 4096);
     memset(dev->tx_buffers, 0, tx_pages * 4096);
