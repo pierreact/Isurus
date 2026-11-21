@@ -232,6 +232,18 @@ kernel32:                                               ; Yay!
                                                         ; below VGA) before any call or push.
                                                         ; The 32-bit SS descriptor at gdt[0x10]
                                                         ; already has G=1, B=1 so ESP is honoured.
+                                                        ;
+                                                        ; Zero .bss. Nothing else clears it: the CD
+                                                        ; boot copy leaves leftover image bytes from
+                                                        ; 0x18000 up, and RAM content is undefined on
+                                                        ; real hardware. The 16-bit code writes no
+                                                        ; .bss, so this is the first safe point.
+    cld                                                 ;
+    xor eax, eax                                        ;
+    mov edi, __bss                                      ;
+    mov ecx, kernelEnd                                  ;
+    sub ecx, edi                                        ; Byte count
+    rep stosb                                           ;
 jmp include_32bits_functions                            ; Jump after functions inclusion
                                                         ;
 %include 'asm32/asm32_display.inc'                      ; Screen functions.
