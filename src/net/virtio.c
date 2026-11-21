@@ -97,14 +97,16 @@ next:
 }
 
 // Map all MMIO BARs used by the device
-static void map_device_bars(const PCIDevice *pci) {
+static int map_device_bars(const PCIDevice *pci) {
     for (int i = 0; i < 6; i++) {
         if (pci->bar[i] && pci->bar_is_mmio[i]) {
             // Map at least 4KB per BAR (most virtio BARs are small)
             // For larger BARs we'd need to read the BAR size; 64KB is safe
-            map_mmio_range(pci->bar[i], 0x10000);
+            if (map_mmio_range(pci->bar[i], 0x10000) != 0)
+                return -1;
         }
     }
+    return 0;
 }
 
 int virtio_pci_init_device(VirtioPCIDevice *vdev, const PCIDevice *pci) {
@@ -118,7 +120,8 @@ int virtio_pci_init_device(VirtioPCIDevice *vdev, const PCIDevice *pci) {
     pci_config_write16(pci, 0x04, cmd);
 
     // Map BARs
-    map_device_bars(pci);
+    if (map_device_bars(pci) != 0)
+        return -1;
 
     // Find virtio PCI capabilities
     if (find_virtio_caps(vdev) != 0)
@@ -208,6 +211,10 @@ int virtio_pci_setup_queue(VirtioPCIDevice *vdev, uint16 queue_idx) {
     // Allocate used ring: 4 + 8*size bytes
     uint32 used_pages = (4 + 8 * size + 4095) / 4096;
     uint64 used_phys = alloc_pages(used_pages);
+
+    // Pages from a partial success are not reclaimable (bump allocator).
+    if (desc_phys == 0 || avail_phys == 0 || used_phys == 0)
+        return -1;
 
     // Zero all memory
     memset((void *)desc_phys, 0, desc_pages * 4096);

@@ -302,6 +302,17 @@ int app_launch(const char *manifest_path) {
     }
     }   // end of has_ip_config block
 
+    // User stacks: one per core, allocated on first use and reused.
+    // Checked before the slot is filled so a failure leaves no state.
+    for (uint32 i = 0; i < manifest.core_count; i++) {
+        if (ap_user_stack_get(manifest.cores[i]) == 0) {
+            kprint("APP: no memory for user stack on core ");
+            kprint_dec(manifest.cores[i]);
+            putc('\n');
+            return -1;
+        }
+    }
+
     // Load binary
     uint64 load_addr = APP_LOAD_BASE + (uint64)slot * APP_REGION_SIZE;
     uint32 file_size = vfs_file_size(manifest.binary);
@@ -396,10 +407,9 @@ int app_launch(const char *manifest_path) {
         }
     }
 
-    // Allocate user stacks and set entry addresses
+    // Set entry addresses (user stacks were obtained above)
     for (uint32 i = 0; i < manifest.core_count; i++) {
         uint32 c = manifest.cores[i];
-        ap_user_stacks[c] = alloc_pages(USER_STACK_SIZE / 4096);
         ap_entry_addrs[c] = load_addr;
     }
 

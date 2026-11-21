@@ -54,6 +54,14 @@ int task_create(const char *name, void (*entry)(void)) {
     }
     if (slot == 0xFF) return -1;
 
+    // Allocate both stacks before touching the slot, so a failure leaves
+    // it TASK_UNUSED. alloc_pages memory is never freed: on a kstack
+    // failure the user stack pages are lost (boot-time only today).
+    uint64 stack_base = alloc_pages(TASK_STACK_PAGES);      // user (ring 3)
+    if (stack_base == 0) return -1;
+    uint64 kstack_base = alloc_pages(TASK_STACK_PAGES);     // kernel (ring 0)
+    if (kstack_base == 0) return -1;
+
     Task *t = &bsp_tasks[slot];
     t->id = slot;
     t->state = TASK_READY;
@@ -63,12 +71,10 @@ int task_create(const char *name, void (*entry)(void)) {
         t->name[i] = name[i];
     t->name[15] = '\0';
 
-    // Allocate user stack (ring 3)
-    t->stack_base = alloc_pages(TASK_STACK_PAGES);
+    t->stack_base = stack_base;
     t->user_rsp = t->stack_base + TASK_STACK_PAGES * 4096;
 
-    // Allocate kernel stack (ring 0)
-    t->kstack_base = alloc_pages(TASK_STACK_PAGES);
+    t->kstack_base = kstack_base;
     t->kstack_top = t->kstack_base + TASK_STACK_PAGES * 4096;
 
     t->entry = (uint64)entry;

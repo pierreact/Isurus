@@ -33,7 +33,8 @@ void cpu_init(void) {
         percpu[i].cr3 = (uint64)PML4T_LOCATION;
         if (i > 0) {
             uint64 base = alloc_pages(AP_STACK_SIZE / 4096);
-            percpu[i].stack_top = base + AP_STACK_SIZE;
+            // stack_top == 0 tells ap_startup to leave this AP offline.
+            percpu[i].stack_top = base ? base + AP_STACK_SIZE : 0;
         }
     }
 

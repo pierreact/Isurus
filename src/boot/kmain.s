@@ -621,6 +621,15 @@ include_64bits_functions:                               ; /include
     mov rdi, shell_task_name                             ; arg1 = task name
     mov rsi, shell_ring3_entry                          ; arg2 = entry point
     call task_create                                    ; Create shell as BSP task 0
+    cmp eax, 0                                          ; task_create returns -1 when no stack memory
+    jge shell_task_ok                                   ;
+    mov rdi, msg_shell_task_failed                      ;
+    call kprint                                         ;
+    cli                                                 ;
+shell_task_halt:                                        ;
+    hlt                                                 ; No shell, nothing to run.
+    jmp shell_task_halt                                 ;
+shell_task_ok:                                          ;
     call task_run_first                                 ; Drop to ring 3 (does not return)
                                                         ;
 ;----------------------------------------------------------------------------------------------------------------------------------------
@@ -659,6 +668,8 @@ msg_enable_paging:         db 'K32 ', 0x1A, ' Paging enabled about to jump in tr
 msg_64_bits:            db 'K64 ', 0x1A, ' Kernel 64 bits enabled and active.', 0
 
 msg_c64_function:       db 'K64 ', 0x1A, ' Processor initialization done.', 10, 0
+
+msg_shell_task_failed:  db 'TASK: cannot create shell task, halting', 10, 0
 
 ;----------------------------------------------------------------------------------------------------------------------------------------
 ; Mutable data in .data section (only data that must be writable goes here)

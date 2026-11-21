@@ -10,6 +10,16 @@
 uint64 ap_user_stacks[MAX_CPUS];
 uint64 ap_entry_addrs[MAX_CPUS];
 
+// One user stack per AP, allocated on first use and reused by every
+// later launch on that core (a core runs one ring 3 thread at a time).
+// Returns 0 if the stack cannot be allocated.
+uint64 ap_user_stack_get(uint32 cpu_idx) {
+    if (cpu_idx >= MAX_CPUS) return 0;
+    if (ap_user_stacks[cpu_idx] == 0)
+        ap_user_stacks[cpu_idx] = alloc_pages(USER_STACK_SIZE / 4096);
+    return ap_user_stacks[cpu_idx];
+}
+
 // AP ring 3 launcher. Called on each AP via ap_dispatch.
 // Does IRETQ to ring 3 -- does NOT return. When the ring 3 code
 // calls exit (SYS_TASK_EXIT), the syscall handler resets the AP's
@@ -66,7 +76,10 @@ int loader_exec(const char *iso_path) {
     // Allocate user stacks and set entry address for each AP
     for (uint32 i = 1; i < cpu_count; i++) {
         if (!percpu[i].running) continue;
-        ap_user_stacks[i] = alloc_pages(USER_STACK_SIZE / 4096);
+        if (ap_user_stack_get(i) == 0) {
+            kprint("LOADER: no memory for user stack, aborting\n");
+            return -1;
+        }
         ap_entry_addrs[i] = USER_LOAD_ADDR;
     }
 

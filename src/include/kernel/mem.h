@@ -6,11 +6,11 @@ void heap_init();
 void *kmalloc(size_t size);
 void kfree(void* ptr);
 void map_mmio_region(void);
-void map_mmio_range(uint64 phys_start, uint64 size);
+int  map_mmio_range(uint64 phys_start, uint64 size);   // 0 ok, -1 no page-table memory
 void *memcpy(void *dest, const void *src, size_t n);
 void *memset(void *dest, int val, size_t n);
 void heap_stats(uint32 *used_blocks, uint32 *free_blocks, uint32 *total_blocks);
-uint64 alloc_pages(uint32 n);
+uint64 alloc_pages(uint32 n);   // never freed; returns 0 when out of range, callers must check
 uint64 alloc_bsp_stack(void);
 
 void inc_256(uint8* slot, uint8* write);

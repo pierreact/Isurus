@@ -50,6 +50,11 @@ void l2_kern_init(void) {
     // NIC 0: management (has IP, ARP active)
     if (nic_count > 0) {
         mgmt_pool_mem = (uint8 *)alloc_pages(BSP_POOL_PAGES);
+    }
+    if (nic_count > 0 && !mgmt_pool_mem) {
+        // Same state as "no mgmt NIC": bsp_mgmt stays zeroed.
+        kprint("L2: no memory for mgmt NIC pool, L2 disabled on NIC 0\n");
+    } else if (nic_count > 0) {
         l2_init(&bsp_mgmt, kern_backend, (void *)(uint64)0,
                 htonl(MGMT_IP_DEFAULT), BSP_POOL_PAGES, mgmt_pool_mem);
         bsp_mgmt.mask = htonl(MGMT_MASK_DEFAULT);
@@ -75,6 +80,10 @@ void l2_kern_init(void) {
     // NIC 1: inter-node DSM (no IP, no ARP replies)
     if (nic_count > 1) {
         inter_pool_mem = (uint8 *)alloc_pages(BSP_POOL_PAGES);
+    }
+    if (nic_count > 1 && !inter_pool_mem) {
+        kprint("L2: no memory for inter NIC pool, L2 disabled on NIC 1\n");
+    } else if (nic_count > 1) {
         l2_init(&bsp_inter, kern_backend, (void *)(uint64)1,
                 0, BSP_POOL_PAGES, inter_pool_mem);
         kprint("L2: inter NIC 1 pool ");

@@ -116,6 +116,14 @@ static CmdHeader *cmd_lists[AHCI_MAX_PORTS];
 static ReceivedFIS *fis_bufs[AHCI_MAX_PORTS];
 static CmdTable *cmd_tables[AHCI_MAX_PORTS];
 
+// One DMA bounce buffer for all transfers, allocated once in ahci_init.
+// BSP-only, one command at a time, so a single buffer is enough.
+// alloc_pages memory is below APP_LOAD_BASE (32 MB): reachable by HBAs
+// without 64-bit addressing (CAP.S64A = 0).
+#define AHCI_BOUNCE_PAGES  16                       // 64 KB per command
+#define AHCI_BOUNCE_SIZE   (AHCI_BOUNCE_PAGES * 4096)
+static uint64 dma_bounce;
+
 static uint32 hba_read(uint32 reg) {
     return *(volatile uint32 *)(abar + reg);
 }
@@ -167,22 +175,25 @@ static void port_start(uint8 port) {
     port_write(port, PORT_CMD, cmd);
 }
 
-// Initialize a port's DMA structures
-static void port_init_dma(uint8 port) {
+// Initialize a port's DMA structures. Returns -1 (port left stopped)
+// when the DMA pages cannot be allocated.
+static int port_init_dma(uint8 port) {
     port_stop(port);
 
-    // Allocate command list (1KB, 1KB-aligned)
+    // Command list (1KB, 1KB-aligned), received FIS buffer (256 bytes,
+    // 256-aligned), one command table (128-aligned): one page each.
     uint64 cl_phys = alloc_pages(1);
+    uint64 fb_phys = alloc_pages(1);
+    uint64 ct_phys = alloc_pages(1);
+    if (cl_phys == 0 || fb_phys == 0 || ct_phys == 0)
+        return -1;
+
     memset((void *)cl_phys, 0, 4096);
     cmd_lists[port] = (CmdHeader *)cl_phys;
 
-    // Allocate received FIS buffer (256 bytes, 256-aligned)
-    uint64 fb_phys = alloc_pages(1);
     memset((void *)fb_phys, 0, 4096);
     fis_bufs[port] = (ReceivedFIS *)fb_phys;
 
-    // Allocate one command table (128-aligned)
-    uint64 ct_phys = alloc_pages(1);
     memset((void *)ct_phys, 0, 4096);
     cmd_tables[port] = (CmdTable *)ct_phys;
 
@@ -202,6 +213,7 @@ static void port_init_dma(uint8 port) {
     port_write(port, PORT_IS, port_read(port, PORT_IS));
 
     port_start(port);
+    return 0;
 }
 
 // Issue a command on slot 0 and wait for completion
@@ -330,7 +342,7 @@ static void fix_ata_string(char *s, int len) {
 
 // Issue IDENTIFY DEVICE or IDENTIFY PACKET DEVICE
 static int identify_device(uint8 port, uint8 type, AHCIDevice *dev) {
-    uint64 buf_phys = alloc_pages(1);
+    uint64 buf_phys = dma_bounce;
     memset((void *)buf_phys, 0, 4096);
 
     uint8 cmd = (type == AHCI_DEV_SATAPI) ? ATA_CMD_IDENTIFY_PACKET : ATA_CMD_IDENTIFY;
@@ -374,8 +386,17 @@ void ahci_init(void) {
     pci_config_write16(pci, 0x04, cmd);
 
     // Map ABAR
-    map_mmio_range(pci->bar[5], 0x10000);
+    if (map_mmio_range(pci->bar[5], 0x10000) != 0) {
+        kprint("AHCI: cannot map ABAR\n");
+        return;
+    }
     abar = (volatile uint8 *)pci->bar[5];
+
+    dma_bounce = alloc_pages(AHCI_BOUNCE_PAGES);
+    if (dma_bounce == 0) {
+        kprint("AHCI: no memory for DMA bounce buffer\n");
+        return;
+    }
 
     // Enable AHCI mode
     hba_write(HBA_GHC, hba_read(HBA_GHC) | GHC_AE);
@@ -389,7 +410,12 @@ void ahci_init(void) {
         uint8 type = detect_port_type(i);
         if (type == AHCI_DEV_NULL) continue;
 
-        port_init_dma(i);
+        if (port_init_dma(i) != 0) {
+            kprint("AHCI: port ");
+            kprint_dec(i);
+            kprint(" skipped, no memory for DMA structures\n");
+            continue;
+        }
 
         AHCIDevice *dev = &devices[device_count];
         dev->type = type;
@@ -434,26 +460,32 @@ int ahci_read_sectors(uint32 dev_idx, uint64 lba, uint32 count, void *buf) {
     AHCIDevice *dev = &devices[dev_idx];
     if (!dev->present) return -1;
 
-    uint32 buf_size = count * dev->sector_size;
+    if (dma_bounce == 0) return -1;
 
-    // Use a DMA buffer from high memory (must be physically contiguous)
-    uint32 pages = (buf_size + 4095) / 4096;
-    uint64 dma_buf = alloc_pages(pages);
-    memset((void *)dma_buf, 0, pages * 4096);
+    // Read through the fixed bounce buffer in chunks of at most
+    // AHCI_BOUNCE_SIZE. Also keeps each command within the single PRDT
+    // entry and the 16-bit ATA sector count.
+    uint32 chunk_max = AHCI_BOUNCE_SIZE / dev->sector_size;
+    uint8 *out = (uint8 *)buf;
 
-    int rc;
-    if (dev->type == AHCI_DEV_SATAPI) {
-        rc = atapi_read(dev->port_num, lba, count, dma_buf, buf_size);
-    } else {
-        rc = ata_command(dev->port_num, ATA_CMD_READ_DMA_EXT,
-                         lba, (uint16)count, dma_buf, buf_size, 0);
+    while (count > 0) {
+        uint32 n = count < chunk_max ? count : chunk_max;
+        uint32 n_bytes = n * dev->sector_size;
+        memset((void *)dma_bounce, 0, n_bytes);
+
+        int rc;
+        if (dev->type == AHCI_DEV_SATAPI) {
+            rc = atapi_read(dev->port_num, lba, n, dma_bounce, n_bytes);
+        } else {
+            rc = ata_command(dev->port_num, ATA_CMD_READ_DMA_EXT,
+                             lba, (uint16)n, dma_bounce, n_bytes, 0);
+        }
+        if (rc != 0) return rc;
+
+        memcpy(out, (void *)dma_bounce, n_bytes);
+        out += n_bytes;
+        lba += n;
+        count -= n;
     }
-
-    if (rc == 0) {
-        memcpy(buf, (void *)dma_buf, buf_size);
-    }
-
-    // Note: dma_buf pages are leaked (no page free). Acceptable for
-    // occasional reads; proper page freeing comes with a real allocator.
-    return rc;
+    return 0;
 }
