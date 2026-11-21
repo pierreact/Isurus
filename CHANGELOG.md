@@ -1,5 +1,13 @@
 # Changelog
 
+## [2026-11-21] - Zero .bss at boot
+
+### Fixed
+- Kernel .bss was never zeroed. On CD boot the bootsector copy zeroes it only up to 0x1000 + KSIZE*512 (0x18000 when found); above it, .bss held leftover boot image bytes (kernel .rodata). Static variables placed there started non-zero: with a 256-byte larger mem.o .bss, input_head read 0x12489 (shell consumed garbage as the first command) and drive_sectors read "cdef" (FAT32 mounted at /mnt/IDE with no IDE controller). kernel32 in src/boot/kmain.s now zeroes [__bss, kernelEnd) before any .bss use. On real hardware RAM content at boot is undefined, so this applies to every boot path.
+
+### Changed
+- Tests: "Shell runs in ring 3" matches "Current privilege level: ring 3" (the old pattern "ring 3" also matched a boot message and passed when the command was lost). New absence checks: no "Unknown command" in either phase, no /mnt/IDE FAT32 mount when no IDE controller is present.
+
 ## [2026-04-25] - Wake-up-latency infrastructure (PIT + virtio-net INTx)
 
 ### Context

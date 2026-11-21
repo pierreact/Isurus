@@ -164,7 +164,25 @@ check() {
     fi
 }
 
+check_absent() {
+    local desc="$1"
+    local pattern="$2"
+    if grep -q "$pattern" "$SERIAL_LOG"; then
+        echo "  FAIL: $desc (unexpected: $pattern)"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: $desc"
+        PASS=$((PASS + 1))
+    fi
+}
+
 echo "Running tests..."
+
+# Test: no FAT32 mount when there is no IDE controller (uninitialized .bss
+# made ide_get_sector_count() return leftover image bytes).
+if grep -q "IDE: No controller present" "$SERIAL_LOG"; then
+    check_absent "No /mnt/IDE without IDE controller" "mounted fat32 at /mnt/IDE"
+fi
 
 # Test: shell prompt appeared (boot succeeded)
 check "Boot complete (shell prompt)" "> "
@@ -181,7 +199,7 @@ check "Dropped to ring 3" "TASK: dropping to ring 3"
 
 # Test: sys.cpu.ring (shell runs in ring 3)
 send_cmd "sys.cpu.ring"
-check "Shell runs in ring 3" "ring 3"
+check "Shell runs in ring 3" "Current privilege level: ring 3"
 
 # Test: sys.cpu.ls
 send_cmd "sys.cpu.ls"
@@ -285,6 +303,9 @@ check "L2 stats displayed" "rx_frames"
 send_cmd "sys.net.arp"
 check "ARP table displayed" "ARP"
 
+# Every command sent above is valid: an unknown command means corrupted input.
+check_absent "No garbled shell input" "Unknown command"
+
 # Stop the main QEMU instance before starting the L2 test instance.
 kill "$KEEPALIVE_PID" 2>/dev/null || true
 KEEPALIVE_PID=""
@@ -384,6 +405,7 @@ send_cmd "sys.net.stats"
 send_cmd "sys.net.arp"
 check "L2 ARP reply sent" "arp_reply: [1-9]"
 check "Host in ARP table" "10.0.2.2"
+check_absent "No garbled shell input (L2 phase)" "Unknown command"
 
 # ============================================================================
 # L3 tests: IPv4 + ICMP Echo on the kernel mgmt NIC and the DPDK L3 AP app

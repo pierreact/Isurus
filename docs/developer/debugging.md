@@ -116,6 +116,12 @@ Common causes:
 **Cause**: Paging structures don't map currently executing code
 **Solution**: Ensure low memory (0x0 - 0x200000) is identity mapped
 
+### Layout-sensitive failures (uninitialized `.bss`, fixed 2026-11-21)
+**Symptoms**: After a change that only moves `.bss` (a new static array), the first shell command arrives as garbage (`Unknown command: $$$$' '...`) and FAT32 mounts at `/mnt/IDE` although `IDE: No controller present`.
+**Cause**: Nothing zeroed `.bss`. The CD boot copy (bootsector, KSIZE = kernel sectors + 32) zeroes `.bss` only up to `0x1000 + KSIZE*512` (0x18000 at the time). Above it, memory still held the El Torito load: kernel `.rodata` bytes. Variables that moved above that line started non-zero (`input_head`, `drive_sectors`).
+**Solution**: `kernel32:` in `src/boot/kmain.s` zeroes `[__bss, kernelEnd)` right after setting ESP. The 16-bit code writes no `.bss`.
+**Diagnosis**: no CPU write hit a GDB watchpoint on the variable, so the value was present from boot. Address minus 0x7C00 minus 0x200 (bootsector) gave the `kernel.bin` offset of the leftover bytes; `xxd` at that offset showed the same values.
+
 ### Layout-sensitive failures (boot stack corrupting `.text`, fixed 2026-04-22)
 **Symptoms**: Tests pass/fail depending on cosmetic code changes, `-O` level, or an unused helper. Failing test is whichever function lands near the stack area (~0xEF78 / end of `.text`).
 **Cause**: 16->32 bit transition in `src/boot/kmain.s` never set ESP. 16-bit stack was SS=0x8000:SP=0xF000 (linear 0x8F000). After PE=1 and flat SS reload, ESP=0x0000F000, inside kernel `.text`. Small GDT flat-data descriptor had granularity byte 0x8F (B=0), so stack ops used 16-bit SP. Every 32-bit push (PIC init, IDT fill, paging setup, long-mode probe) wrote into kernel code; e.g. `call sh_print` in `cmd_thread_ls` went from `e8 83 e3 ff ff` to `e8 83 e3 ff 00`.
