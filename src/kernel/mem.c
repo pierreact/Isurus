@@ -24,6 +24,17 @@ static uint64 heap_start;
 static uint64 heap_end;
 static uint32 num_blocks;
 static uint8 heap_bitmap[MAX_BITMAP_SIZE];
+// Blocks in the allocation starting at this block; 0 if not a span start.
+static uint8 span_len[MAX_BITMAP_SIZE * 8];
+
+static int block_used(uint32 i) {
+    return heap_bitmap[i / 8] & (1 << (i % 8));
+}
+
+static void block_set(uint32 i, int used) {
+    if (used) heap_bitmap[i / 8] |= (uint8)(1 << (i % 8));
+    else      heap_bitmap[i / 8] &= (uint8)~(1 << (i % 8));
+}
 
 void init_memmgr() {
     kprint("Initializing memory manager.\n");
@@ -62,6 +73,9 @@ void heap_init() {
     for(uint32 i = 0; i < MAX_BITMAP_SIZE; i++) {
         heap_bitmap[i] = 0;
     }
+    for(uint32 i = 0; i < MAX_BITMAP_SIZE * 8; i++) {
+        span_len[i] = 0;
+    }
 
     kprint("Heap: ");
     kprint_long2hex(heap_start, " - ");
@@ -70,17 +84,26 @@ void heap_init() {
     kprint(" blocks)\n");
 }
 
+// First-fit: ceil(size / BLOCK_SIZE) contiguous blocks.
 void *kmalloc(size_t size) {
     if(size == 0) return NULL;
+    if(size > (size_t)num_blocks * BLOCK_SIZE) return NULL;
+
+    uint32 n = (uint32)((size + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    uint32 run = 0;
 
     for(uint32 i = 0; i < num_blocks; i++) {
-        uint32 byte_idx = i / 8;
-        uint32 bit_idx = i % 8;
-
-        if(!(heap_bitmap[byte_idx] & (1 << bit_idx))) {
-            heap_bitmap[byte_idx] |= (1 << bit_idx);
-            return (void*)(uint64)(heap_start + i * BLOCK_SIZE);
+        if(block_used(i)) {
+            run = 0;
+            continue;
         }
+        if(++run < n) continue;
+
+        uint32 first = i + 1 - n;
+        for(uint32 b = first; b <= i; b++)
+            block_set(b, 1);
+        span_len[first] = (uint8)n;
+        return (void*)(uint64)(heap_start + first * BLOCK_SIZE);
     }
 
     return NULL;
@@ -90,22 +113,29 @@ void kfree(void *ptr) {
     if(ptr == NULL) return;
 
     uint64 addr = (uint64)ptr;
-    if(addr < heap_start || addr >= heap_end) return;
+    if(addr < heap_start || addr >= heap_start + (uint64)num_blocks * BLOCK_SIZE
+       || (addr - heap_start) % BLOCK_SIZE != 0) {
+        kprint_long2hex(addr, " kfree: not a heap pointer\n");
+        return;
+    }
 
-    uint32 block = (addr - heap_start) / BLOCK_SIZE;
-    uint32 byte_idx = block / 8;
-    uint32 bit_idx = block % 8;
+    uint32 first = (addr - heap_start) / BLOCK_SIZE;
+    uint32 n = span_len[first];
+    if(n == 0) {
+        kprint_long2hex(addr, " kfree: not an allocation start\n");
+        return;
+    }
 
-    heap_bitmap[byte_idx] &= ~(1 << bit_idx);
+    for(uint32 b = first; b < first + n; b++)
+        block_set(b, 0);
+    span_len[first] = 0;
 }
 
 // Count used/free blocks by scanning the bitmap
 void heap_stats(uint32 *used_blocks, uint32 *free_blocks, uint32 *total_blocks) {
     uint32 used = 0;
     for(uint32 i = 0; i < num_blocks; i++) {
-        uint32 byte_idx = i / 8;
-        uint32 bit_idx = i % 8;
-        if(heap_bitmap[byte_idx] & (1 << bit_idx))
+        if(block_used(i))
             used++;
     }
     *used_blocks = used;

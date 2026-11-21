@@ -225,7 +225,8 @@ check "Heap info displayed" "Heap"
 
 # Test: sys.mem.test
 send_cmd "sys.mem.test"
-check "Memory test passed" "Test complete"
+check "Memory test passed" "Heap test: PASS"
+check "kmalloc multi-page spans" "ok   alloc 1, 2, 6 pages"
 
 # Test: sys.mem.info
 send_cmd "sys.mem.info"
