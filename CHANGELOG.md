@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026-11-21] - kmalloc multi-page spans
+
+### Fixed
+- kmalloc returned one 4 KB block regardless of size. It now returns ceil(size/4096) contiguous blocks (first-fit). Callers that asked for more than 4 KB wrote into the next block: pci_ids_init (data/pci.ids is 4552 bytes) on every boot, and FAT32 cluster buffers on volumes with clusters larger than 4 KB.
+- kfree freed one block. It now frees the whole span, using a per-block span length recorded by kmalloc. A pointer that is not the start of an allocation is reported and ignored.
+
+### Changed
+- sys.mem.test: checks multi-page allocation, alignment, disjoint spans, full-span writes, span reuse after free, refusal of kfree inside a span, oversize failure, and used-block accounting. Prints "Heap test: PASS" or "Heap test: FAIL (n checks)".
+
 ## [2026-11-21] - Zero .bss at boot
 
 ### Fixed

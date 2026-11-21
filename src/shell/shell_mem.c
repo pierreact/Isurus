@@ -26,45 +26,94 @@ void cmd_meminfo(void) {
     }
 }
 
+static uint32 memtest_failures;
+
+static void memtest_check(int ok, char *what) {
+    sh_print(ok ? "  ok   " : "  FAIL ");
+    sh_print(what);
+    sh_print("\n");
+    if (!ok) memtest_failures++;
+}
+
+static uint32 heap_used(void) {
+    uint32 used, free_blocks, total;
+    sh_heap_stats(&used, &free_blocks, &total);
+    return used;
+}
+
+// Fill [p, p+len) with a pattern derived from tag; return 1 if it reads back.
+static int fill_and_check(uint8 *p, uint64 len, uint8 tag) {
+    for (uint64 i = 0; i < len; i++) p[i] = (uint8)(tag ^ i);
+    for (uint64 i = 0; i < len; i++)
+        if (p[i] != (uint8)(tag ^ i)) return 0;
+    return 1;
+}
+
+static int disjoint(uint64 a, uint64 alen, uint64 b, uint64 blen) {
+    return a + alen <= b || b + blen <= a;
+}
+
 void cmd_memtest(void) {
     sh_print("Testing heap allocator...\n");
+    memtest_failures = 0;
 
-    void *p1 = sh_malloc(100);
-    if (p1) {
-        sh_print("Allocated block 1: ");
-        sh_print_hex((uint64)p1, "\n");
-    } else {
-        sh_print("Failed to allocate block 1\n");
+    uint32 used0, free0, total;
+    sh_heap_stats(&used0, &free0, &total);
+
+    // Sizes: 1 page, 2 pages, 5 pages + 1 byte (6 pages)
+    uint64 la = 4096, lb = 2 * 4096, lc = 5 * 4096 + 1;
+    uint8 *a = (uint8 *)sh_malloc(la);
+    uint8 *b = (uint8 *)sh_malloc(lb);
+    uint8 *c = (uint8 *)sh_malloc(lc);
+    memtest_check(a && b && c, "alloc 1, 2, 6 pages");
+    if (!(a && b && c)) {
+        sh_free(a); sh_free(b); sh_free(c);
+        sh_print("Heap test: FAIL\n");
         return;
     }
 
-    void *p2 = sh_malloc(200);
-    if (p2) {
-        sh_print("Allocated block 2: ");
-        sh_print_hex((uint64)p2, "\n");
+    memtest_check((((uint64)a | (uint64)b | (uint64)c) & 4095) == 0,
+                  "page aligned");
+    memtest_check(heap_used() == used0 + 1 + 2 + 6, "used blocks +9");
+    memtest_check(disjoint((uint64)a, la, (uint64)b, lb) &&
+                  disjoint((uint64)a, la, (uint64)c, lc) &&
+                  disjoint((uint64)b, lb, (uint64)c, lc), "spans disjoint");
+
+    fill_and_check(a, la, 0xA5);
+    fill_and_check(b, lb, 0x5A);
+    memtest_check(fill_and_check(c, lc, 0x3C), "write full 6-page span");
+    int intact = 1;
+    for (uint64 i = 0; i < la; i++) if (a[i] != (uint8)(0xA5 ^ i)) intact = 0;
+    for (uint64 i = 0; i < lb; i++) if (b[i] != (uint8)(0x5A ^ i)) intact = 0;
+    memtest_check(intact, "other spans intact after write");
+
+    // Freeing an address inside a span must be refused.
+    sh_free(c + 4096);
+    memtest_check(heap_used() == used0 + 9, "kfree inside span refused");
+
+    // First-fit: no free run of 2 blocks exists below b, so b is reused.
+    sh_free(b);
+    memtest_check(heap_used() == used0 + 7, "kfree releases whole span");
+    uint8 *d = (uint8 *)sh_malloc(lb);
+    memtest_check(d == b, "re-alloc same size reuses span");
+
+    // More than the whole heap cannot be satisfied.
+    void *e = sh_malloc((uint64)(total + 1) * 4096);
+    memtest_check(e == NULL, "alloc larger than heap fails");
+    sh_free(e);
+
+    sh_free(a);
+    sh_free(c);
+    sh_free(d);
+    memtest_check(heap_used() == used0, "used blocks back to start");
+
+    if (memtest_failures == 0) {
+        sh_print("Heap test: PASS\n");
     } else {
-        sh_print("Failed to allocate block 2\n");
-        sh_free(p1);
-        return;
+        sh_print("Heap test: FAIL (");
+        sh_print_dec(memtest_failures);
+        sh_print(" checks)\n");
     }
-
-    uint32 *test = (uint32*)p1;
-    *test = 0xDEADBEEF;
-    sh_print("Write test: ");
-    sh_print_hex(*test, "\n");
-
-    sh_free(p1);
-    sh_print("Freed block 1\n");
-
-    void *p3 = sh_malloc(50);
-    if (p3) {
-        sh_print("Allocated block 3: ");
-        sh_print_hex((uint64)p3, "\n");
-    }
-
-    sh_free(p2);
-    sh_free(p3);
-    sh_print("Test complete\n");
 }
 
 void cmd_free(void) {

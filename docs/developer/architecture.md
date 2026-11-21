@@ -33,7 +33,7 @@ If a GRUB menu or ecosystem integration is required later, the supported approac
 malloc allocates a minimum of 4KB (one page). All allocations are multiples of 4KB.
 
 - No sub-page allocation. This eliminates internal fragmentation tracking and the overhead of splitting/coalescing free blocks.
-- The allocator is O(n) bitmap scan with zero metadata per allocation, this need to be improved, maybe removing malloc and giving a (MEM/Cores)-shared statically.
+- The allocator is an O(n) first-fit bitmap scan for ceil(size/4096) contiguous blocks. Metadata per allocation: one span-length byte at the first block, used by kfree to release the whole span. This need to be improved, maybe removing malloc and giving a (MEM/Cores)-shared statically.
 - Fragmentation is a performance problem we avoid entirely by not allowing it.
 
 Trade-off: wastes memory on small allocations. Acceptable for a kernel where most allocations are page-sized anyway (page tables, buffers, per-CPU structures).
