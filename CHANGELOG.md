@@ -7,28 +7,27 @@
 - The kernel never zeroed an app's `.bss` (the flat binary does not contain it), so `.bss` started with the previous app's data. app_image_load now zeroes the app region after the file, and refuses a file larger than the region (APP_REGION_SIZE).
 
 ### Added
-- ThreadMeta `data_base` / `data_size`: a private 128 KB data region per AP (AP_DATA_SIZE), allocated on the first launch on that core, zeroed before every launch (ap_user_prepare). Layout asserted in both cpu.h and apps/libc/isurus.h.
+- ThreadMeta `data_base` / `data_size`: a private 128 KB data region per AP (AP_DATA_SIZE), allocated at boot with the user stack (ap_user_alloc, from cpu_init), zeroed before every launch (ap_user_prepare). Interim: removed when per-thread page tables give each core a private copy of .data/.bss. Layout asserted in both cpu.h and apps/libc/isurus.h.
 - apps/percore and conf/percore.ini: test app that checks the region and `.bss` are zero at entry and the region is private. Run twice in test/run_tests.sh.
 
 ### Changed
 - dpdk_l2, dpdk_l3: packet pool at `meta->data_base`. dpdk_l2 MAX_ITERATIONS comment: the dispatch is parallel; the bound stays because no command stops an app.
 - loader_exec and app_launch share app_image_load and ap_user_prepare.
-- Docs: architecture.md "App memory (until per-thread page tables)", ThreadMeta fields; memory-map.md; tutorial.md "Per-core state". CLAUDE.md AP rules: per-core state in the data region, not in `static` variables.
+- Docs: architecture.md "App memory (until per-thread page tables)", ThreadMeta fields; memory-map.md; tutorial.md "Per-core state". CLAUDE.md AP rules: until per-thread page tables, per-core state in the data region, not in `static` variables.
 
 ## [2026-11-21] - alloc_pages: bounded, no per-operation leaks
 
 ### Fixed
 - Every disk read leaked alloc_pages memory: ahci_read_sectors allocated a DMA buffer per call, and iso9660 allocated one per path component (find_entry), per directory listing and per file read. app_launch and loader_exec allocated new 64 KB user stacks per core on every launch. Measured before the fix: the bump pointer grew 832 KB over 3 demo_app launches and one directory listing. With enough launches it would have reached the app region at 0x2000000 with no error.
-- alloc_pages had no upper bound. It now stops at the end of the usable E820 entry that contains PAGING_LOCATION_END, capped at APP_LOAD_BASE (0x2000000), and returns 0 when a request does not fit.
+- alloc_pages had no upper bound. It now stops at the end of the usable E820 entry that contains PAGING_LOCATION_END, capped at APP_LOAD_BASE (0x2000000). A request that does not fit prints a message and halts.
 
 ### Changed
 - AHCI: one 64 KB DMA bounce buffer allocated in ahci_init; reads are chunked through it. IDENTIFY uses it too.
 - iso9660: one static 2 KB sector buffer. Directories are walked one sector at a time (records never cross a sector); file reads put whole sectors directly into the caller's buffer and only the partial last sector goes through the static buffer. Malformed directory records (length < 34 or past the sector) stop the walk.
-- AP user stacks: ap_user_stack_get allocates one stack per core on first launch and reuses it; app_launch checks it before filling the slot.
-- Callers of alloc_pages check for 0: AP left offline without a stack, task_create returns -1 (kmain halts if the shell task fails), virtio queue/buffer setup fails the NIC, L2 pool failure leaves that NIC without L2, AHCI port skipped, app launch and loader_exec refused. BSP stack and LAPIC/IOAPIC mapping failures halt.
-- map_mmio_range returns -1 when a page-table page cannot be allocated; PCI ECAM, virtio BAR and AHCI ABAR mapping check it.
+- AP user stacks: one 64 KB stack per AP, allocated at boot in cpu_init and reused by every launch. An app launch allocates nothing.
+- alloc_pages is boot-time only and never returns 0, so its callers have no failure path.
 - Tests: bump pointer must not move across 3 demo_app launches and one directory listing.
-- Docs: architecture.md "Page allocator (alloc_pages)" (contract, failure handling), memory-map.md high-memory range and AP user stacks. CLAUDE.md memory rules: alloc_pages one-time only, callers check 0.
+- Docs: architecture.md "Page allocator (alloc_pages)", memory-map.md high-memory range and AP user stacks. CLAUDE.md memory rules: alloc_pages boot-time only, halts when out of range.
 
 ## [2026-11-21] - App launch: NIC lock and duplicate cores
 

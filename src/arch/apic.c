@@ -233,13 +233,6 @@ void ap_startup(void) {
     for (uint32 i = 1; i < cpu_count; i++) {
         uint8 apic_id = cpu_lapic_ids[i];
 
-        if (percpu[i].stack_top == 0) {
-            kprint("SMP: CPU ");
-            kprint_dec(i);
-            kprint(" has no stack, left offline\n");
-            continue;
-        }
-
         // Send INIT IPI
         lapic_write(LAPIC_ICR_HI, ((uint32)apic_id) << 24);
         lapic_write(LAPIC_ICR_LO, ICR_INIT | ICR_LEVEL_ASSERT);

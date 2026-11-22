@@ -28,15 +28,15 @@ BSP (kmalloc/kfree, kernel + BSP ring 3 only):
 - Need >4 KB: pass the real size; never loop kmalloc(4096) (blocks not adjacent)
 - kfree takes the exact pointer kmalloc returned, frees the whole span
 - Long-lived DMA / paging / per-AP stacks: alloc_pages (src/kernel/mem.c, bump allocator, never freed)
-- alloc_pages only for one-time allocations (boot, first use of a per-core resource); never per read, per launch or per request: use a static or once-allocated buffer
-- alloc_pages returns 0 when out of range: every caller checks and fails its operation (docs/developer/architecture.md "Page allocator")
+- alloc_pages is boot-time only; never per read, per launch or per request: use a static buffer or one allocated at boot
+- alloc_pages never returns 0: it halts when out of range, callers do not check (docs/developer/architecture.md "Page allocator")
 
 AP ring-3 threads:
 - No malloc; sys_kmalloc forbidden from AP context
 - Each AP owns node_RAM / cores_on_node of its NUMA node
-- The app image (.data/.bss) is one copy shared by all cores of the app (one CR3 until per-thread page tables): no writable `static` per-core state
-- Per-core working set lives in the private data region `meta->data_base` / `meta->data_size` (128 KB, zeroed per launch); lay it out as one struct (preferred: explicit named fields); no runtime allocation on the data path
-- Allowed: libc bump/slab helper inside the data region, never reaching the kernel
+- Working set is one static struct (preferred: explicit named fields) or static arrays, sized at build time; no runtime allocation on the data path
+- Interim, until per-thread page tables: all cores of an app share one image (.data/.bss, one CR3), so a writable `static` is shared by every core. Put the per-core struct in the private data region `meta->data_base` / `meta->data_size` (128 KB, zeroed per launch) instead
+- Allowed: libc bump/slab helper inside the app's own region, never reaching the kernel
 - Reference: apps/dpdk_l2/main.c (packet pool at `meta->data_base`); check: apps/percore
 
 ## Build and test

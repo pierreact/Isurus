@@ -99,7 +99,7 @@ typedef struct {
 
 ### Per-core state
 
-All cores of an app run the same loaded image, so a `static` variable is one variable shared by every core. Put per-core writable state in the core's private data region (`meta->data_base`, `meta->data_size` bytes). The kernel zeroes the region and the image's `.bss` before every launch.
+The target model is one static struct per thread, sized at build time. Today all cores of an app run the same loaded image (per-thread page tables are not implemented yet), so a `static` variable is one variable shared by every core. Until then, put per-core writable state in the core's private data region (`meta->data_base`, `meta->data_size` bytes). The kernel zeroes the region and the image's `.bss` before every launch.
 
 ```c
 typedef struct { uint64 counter; uint8 pool[64 * 1024]; } CoreState;

@@ -11,29 +11,23 @@
 uint64 ap_user_stacks[MAX_CPUS];
 uint64 ap_entry_addrs[MAX_CPUS];
 
-// One user stack per AP, allocated on first use and reused by every
-// later launch on that core (a core runs one ring 3 thread at a time).
-// Returns 0 if the stack cannot be allocated.
-uint64 ap_user_stack_get(uint32 cpu_idx) {
-    if (cpu_idx >= MAX_CPUS) return 0;
-    if (ap_user_stacks[cpu_idx] == 0)
-        ap_user_stacks[cpu_idx] = alloc_pages(USER_STACK_SIZE / 4096);
-    return ap_user_stacks[cpu_idx];
-}
-
-// One private data region per AP, allocated on first use and reused.
+// One private data region per AP. Interim: with one page table for all
+// cores, the cores of an app share its .data/.bss, so per-core state
+// needs separate memory. Goes away with per-thread page tables, where
+// each core gets a private copy of the image's writable sections.
+// The kernel keeps its own copy of the address: ThreadMeta is writable
+// from ring 3 today.
 static uint64 ap_data_regions[MAX_CPUS];
 
-int ap_user_prepare(uint32 cpu_idx) {
-    if (cpu_idx >= MAX_CPUS) return -1;
-    if (ap_user_stack_get(cpu_idx) == 0) return -1;
-    if (ap_data_regions[cpu_idx] == 0)
-        ap_data_regions[cpu_idx] = alloc_pages(AP_DATA_SIZE / 4096);
-    if (ap_data_regions[cpu_idx] == 0) return -1;
+void ap_user_alloc(uint32 cpu_idx) {
+    ap_user_stacks[cpu_idx] = alloc_pages(USER_STACK_SIZE / 4096);
+    ap_data_regions[cpu_idx] = alloc_pages(AP_DATA_SIZE / 4096);
+}
+
+void ap_user_prepare(uint32 cpu_idx) {
     memset((void *)ap_data_regions[cpu_idx], 0, AP_DATA_SIZE);
     thread_meta[cpu_idx].data_base = ap_data_regions[cpu_idx];
     thread_meta[cpu_idx].data_size = AP_DATA_SIZE;
-    return 0;
 }
 
 uint32 app_image_load(const char *path, uint64 load_addr) {
@@ -101,13 +95,10 @@ int loader_exec(const char *iso_path) {
     kprint(" bytes) at ");
     kprint_long2hex(USER_LOAD_ADDR, "\n");
 
-    // Allocate user stacks and set entry address for each AP
+    // Set entry address for each AP (user stacks are allocated at boot by cpu_init)
     for (uint32 i = 1; i < cpu_count; i++) {
         if (!percpu[i].running) continue;
-        if (ap_user_prepare(i) < 0) {
-            kprint("LOADER: no memory for user stack or data region, aborting\n");
-            return -1;
-        }
+        ap_user_prepare(i);
         ap_entry_addrs[i] = USER_LOAD_ADDR;
     }
 

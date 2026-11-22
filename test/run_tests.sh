@@ -320,9 +320,8 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Test: no alloc_pages leak per launch or file read. Cores 1-3 already
-# have their user stacks from the apps above, so the bump pointer
-# ("Paging structures end") must not move.
+# Test: alloc_pages is boot-time only. App launches and file reads must
+# not move the bump pointer ("Paging structures end").
 paging_end_last() {
     grep -a "Paging structures end" "$SERIAL_LOG" | tail -1 | awk '{print $1}'
 }

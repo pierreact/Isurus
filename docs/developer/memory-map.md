@@ -57,7 +57,7 @@ IOAPIC_BASE     = 0xFEC00000
 Low memory: kernelEnd to 0x9F000 (~580 KB) - used as heap
 High memory: PAGING_LOCATION_END to the alloc_pages limit (end of the usable E820 entry, capped at APP_LOAD_BASE 0x2000000) - bump allocator, never freed, see architecture.md "Page allocator"
 App images: 0x2000000+ (16 MB per app slot; the part after the file, the image .bss, is zeroed per launch)
-AP data regions: 128 KB per AP in high memory (alloc_pages on first launch, zeroed per launch, ThreadMeta.data_base)
+AP data regions: 128 KB per AP in high memory (alloc_pages at boot, zeroed per launch, ThreadMeta.data_base; interim until per-thread page tables)
 
 ## Stack
 
@@ -71,7 +71,7 @@ AP data regions: 128 KB per AP in high memory (alloc_pages on first launch, zero
 | 64-bit (APs) | percpu[i].stack_top | 16 KB per AP, allocated from high memory |
 | 64-bit (BSP ring 3) | task.user_rsp | 64 KB per task, allocated from high memory |
 | 64-bit (BSP ring 0, syscall) | task.kstack_top | 64 KB per task kernel stack |
-| 64-bit (AP ring 3) | ap_user_stacks[i] + 64 KB | 64 KB per AP, allocated on the first launch on that core, reused by later launches |
+| 64-bit (AP ring 3) | ap_user_stacks[i] + 64 KB | 64 KB per AP, allocated at boot in cpu_init, reused by every launch |
 
 **Why the 32-bit stack is pinned to 0x80000:** on the 16 -> 32 bit
 transition the CPU keeps ESP's low 16 bits from real-mode SP

@@ -42,11 +42,10 @@ Trade-off: wastes memory on small allocations. Acceptable for a kernel where mos
 
 `alloc_pages(n)` (`src/kernel/mem.c`) is a bump allocator for long-lived memory: stacks, page tables, DMA rings and buffers, packet pools.
 
-- Range: from `PAGING_LOCATION_END` (end of the boot page tables) up to a limit set in `init_memmgr`: the end of the usable E820 entry that contains the start, capped at `APP_LOAD_BASE` (0x2000000, app images). Before `init_memmgr` runs the limit is 0 and every call fails.
-- Never freed. Call it only for allocations made once (boot, first use of a per-core resource), never per operation. Per-operation buffers are static or allocated once and reused (examples: AHCI DMA bounce buffer, iso9660 sector buffer, per-AP user stacks via `ap_user_stack_get`).
-- **Can fail: returns 0** when the request does not fit below the limit, and prints `MEM: alloc_pages(n pages) failed`. Every caller must check for 0 before use and fail its own operation: return an error, skip the device, leave the AP offline, refuse the app launch. Only callers with no possible fallback halt (BSP stack, LAPIC/IOAPIC mapping, shell task).
-- Pages taken before a failure in the same operation are not returned (bump allocator).
-- `map_mmio_range` allocates page-table pages through it, so it can fail too: returns -1, callers check.
+- Range: from `PAGING_LOCATION_END` (end of the boot page tables) up to a limit set in `init_memmgr`: the end of the usable E820 entry that contains the start, capped at `APP_LOAD_BASE` (0x2000000, app images). Before `init_memmgr` runs the limit is 0.
+- Boot-time only, never freed. Every size is fixed at build time or by the hardware found at boot (CPU count, NICs, AHCI ports). Nothing allocates per operation: per-operation buffers are static or allocated at boot and reused (examples: AHCI DMA bounce buffer, iso9660 sector buffer, per-AP user stacks in `cpu_init`).
+- **Never returns 0.** A request that does not fit below the limit prints `MEM: alloc_pages(n pages) failed` and halts. Callers do not check and have no failure path: a machine either boots with all its memory or does not boot. There is no partial state (AP offline, NIC skipped) to handle later.
+- `map_mmio_range` allocates page-table pages through it, with the same behavior.
 
 ## Execution model
 
@@ -134,10 +133,10 @@ The binary loader (`loader_exec` in `src/kernel/loader.c`) reads a flat binary f
 
 ### App memory (until per-thread page tables)
 
-All APs share one CR3 today (Thread memory isolation below is the target design). Consequences:
+All APs share one CR3 today (Thread memory isolation below is the target design). This section describes an interim state. In the target design each thread has a private copy of the image's writable sections, its working set is a static struct declared at build time, and the data region is removed. Until then:
 
 - One app image per launch, shared by all its cores. Its `.data` and `.bss` are one copy: a `static` writable variable is shared by every core of the app.
-- Per-core writable state goes in the private data region: `AP_DATA_SIZE` (128 KB) per AP, `alloc_pages` on the first launch on that core, reused, zeroed before every launch (`ap_user_prepare`, `src/kernel/loader.c`), passed as `meta->data_base` / `meta->data_size`. Not NUMA-local until per-node allocators exist.
+- Per-core writable state goes in the private data region: `AP_DATA_SIZE` (128 KB) per AP, allocated at boot with the user stack (`ap_user_alloc`, called by `cpu_init`), zeroed before every launch (`ap_user_prepare`, `src/kernel/loader.c`), passed as `meta->data_base` / `meta->data_size`. Not NUMA-local until per-node allocators exist.
 - The flat binary contains no `.bss`. `app_image_load` zeroes the rest of the app region (`APP_REGION_SIZE`) after the file, so `.bss` starts at zero on every launch, and refuses a file larger than the region.
 - Check: `apps/percore` (test/run_tests.sh) verifies region privacy and zeroing of the region and `.bss`.
 
