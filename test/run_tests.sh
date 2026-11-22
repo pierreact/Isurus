@@ -187,6 +187,14 @@ fi
 # Test: shell prompt appeared (boot succeeded)
 check "Boot complete (shell prompt)" "> "
 
+# Test: page-level memory types (PAT entry selected by PWT/PCD/PAT bits).
+# RAM write-back; MMIO uncacheable, also where the boot identity map
+# already covered it.
+check "RAM pages write-back" "MEM: page type RAM 0x100000: WB"
+check "IOAPIC page uncacheable" "MEM: page type IOAPIC 0xFEC00000: UC$"
+check "LAPIC page uncacheable" "MEM: page type LAPIC 0xFEE00000: UC$"
+check "VGA page uncacheable" "MEM: page type VGA 0xB8000: UC$"
+
 # Test: TSS and SYSCALL infrastructure initialized during boot
 check "TSS loaded" "TSS: BSP TSS loaded"
 

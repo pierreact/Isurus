@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-11-22] - Paging: RAM write-back, MMIO uncacheable
+
+### Fixed
+- The boot identity map set PWT on every entry. With the power-on PAT (0x0007040600070406) PWT=1 selects entry 1, write-through: every store to RAM went to memory. Measured at boot in QEMU before the fix: RAM, IOAPIC and LAPIC pages all WT. RAM pages are now WB (PWT=0, PCD=0).
+- MMIO pages already covered by the boot identity map kept the boot map type, because map_mmio_range skipped present entries. Measured: LAPIC and IOAPIC pages WT; PCI ECAM (0xB0000000 in QEMU) goes through the same path. map_mmio_range now sets UC (PCD|PWT) on present entries too. Legacy VGA 0xA0000-0xBFFFF is mapped UC at boot.
+
+### Added
+- Boot log: IA32_PAT value and the page-level type of one RAM, IOAPIC, LAPIC and VGA page. Tests check WB for RAM and UC for the three MMIO pages.
+- Docs: memory-map.md "Memory types".
+
 ## [2026-11-22] - Apps: per-core data region, .bss zeroed per launch
 
 ### Fixed

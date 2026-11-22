@@ -15,6 +15,7 @@ extern uint8 kernelEnd[];
 #define PTE_USER      0x04
 #define PTE_PWT       0x08
 #define PTE_PCD       0x10
+#define PTE_PAT_4K    0x80          // PAT bit in a 4 KB PTE (PS bit in a PDE/PDPTE)
 
 // Heap: dynamic range from end of BSS to 0x9F000
 #define BLOCK_SIZE      4096
@@ -209,27 +210,31 @@ void map_mmio_range(uint64 phys_start, uint64 size) {
         // Check/create PDPT entry
         if (!(pml4[pml4_idx] & PTE_PRESENT)) {
             uint64 new_pdpt = alloc_page_table();
-            pml4[pml4_idx] = new_pdpt | PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_PWT;
+            pml4[pml4_idx] = new_pdpt | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
         }
         volatile uint64 *pdpt = (volatile uint64 *)(pml4[pml4_idx] & 0x000FFFFFFFFFF000ULL);
 
         // Check/create PD entry
         if (!(pdpt[pdpt_idx] & PTE_PRESENT)) {
             uint64 new_pd = alloc_page_table();
-            pdpt[pdpt_idx] = new_pd | PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_PWT;
+            pdpt[pdpt_idx] = new_pd | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
         }
         volatile uint64 *pd = (volatile uint64 *)(pdpt[pdpt_idx] & 0x000FFFFFFFFFF000ULL);
 
         // Check/create PT entry
         if (!(pd[pd_idx] & PTE_PRESENT)) {
             uint64 new_pt = alloc_page_table();
-            pd[pd_idx] = new_pt | PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_PWT;
+            pd[pd_idx] = new_pt | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
         }
         volatile uint64 *pt = (volatile uint64 *)(pd[pd_idx] & 0x000FFFFFFFFFF000ULL);
 
-        // Map the page: identity map with cache disable (PCD) for MMIO
+        // Map the page: identity map, UC (PCD|PWT, PAT bit 0) for MMIO.
+        // The boot identity map already covers MMIO below the highest E820
+        // address as normal RAM pages: set UC on those too, keep other bits.
         if (!(pt[pt_idx] & PTE_PRESENT)) {
             pt[pt_idx] = vaddr | PTE_PRESENT | PTE_WRITABLE | PTE_PCD | PTE_PWT;
+        } else {
+            pt[pt_idx] = (pt[pt_idx] & ~(uint64)(PTE_PAT_4K | PTE_PCD | PTE_PWT)) | PTE_PCD | PTE_PWT;
         }
     }
 
@@ -239,10 +244,60 @@ void map_mmio_range(uint64 phys_start, uint64 size) {
     __asm__ volatile("mov %0, %%cr3" : : "r"(cr3));
 }
 
+// Memory type of the page that maps vaddr in the current page tables:
+// PAT entry selected by the leaf's PAT/PCD/PWT bits (Intel SDM vol. 3,
+// "PAT"). The MTRRs can still lower it (an MTRR UC range wins).
+// Returns -1 if vaddr is not mapped.
+static int page_mem_type(uint64 vaddr, uint64 pat) {
+    volatile uint64 *t = (volatile uint64 *)(uint64)PML4T_LOCATION;
+    for (int level = 3; level >= 0; level--) {
+        uint64 e = t[(vaddr >> (12 + 9 * level)) & 0x1FF];
+        if (!(e & PTE_PRESENT)) return -1;
+        int leaf = level == 0 || (level < 3 && (e & 0x80));   // PS bit
+        if (leaf) {
+            uint64 pat_bit = level == 0 ? (e >> 7) & 1 : (e >> 12) & 1;
+            uint32 idx = (uint32)(pat_bit << 2 | ((e >> 4) & 1) << 1 | ((e >> 3) & 1));
+            return (int)((pat >> (8 * idx)) & 7);
+        }
+        t = (volatile uint64 *)(e & 0x000FFFFFFFFFF000ULL);
+    }
+    return -1;
+}
+
+static char *mem_type_name(int type) {
+    switch (type) {
+    case 0: return "UC";
+    case 1: return "WC";
+    case 4: return "WT";
+    case 5: return "WP";
+    case 6: return "WB";
+    case 7: return "UC-";
+    case -1: return "unmapped";
+    default: return "reserved";
+    }
+}
+
+static void report_mem_type(char *label, uint64 vaddr, uint64 pat) {
+    kprint(label);
+    kprint(mem_type_name(page_mem_type(vaddr, pat)));
+    putc('\n');
+}
+
 // Map APIC MMIO region (legacy wrapper)
 void map_mmio_region(void) {
     map_mmio_range(0xFEC00000ULL, 0x300000ULL);
     kprint("MEM: MMIO region 0xFEC00000-0xFEF00000 mapped\n");
+    map_mmio_range(0xA0000ULL, 0x20000ULL);      // legacy VGA (text buffer at 0xB8000)
+
+    // Page-level memory types, from the PAT MSR as firmware left it
+    uint32 lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0x277));
+    uint64 pat = (uint64)hi << 32 | lo;
+    kprint_long2hex(pat, " MEM: IA32_PAT\n");
+    report_mem_type("MEM: page type RAM 0x100000: ", 0x100000ULL, pat);
+    report_mem_type("MEM: page type IOAPIC 0xFEC00000: ", 0xFEC00000ULL, pat);
+    report_mem_type("MEM: page type LAPIC 0xFEE00000: ", 0xFEE00000ULL, pat);
+    report_mem_type("MEM: page type VGA 0xB8000: ", 0xB8000ULL, pat);
 }
 
 // Prevent GCC from replacing these loops with calls to themselves
