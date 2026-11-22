@@ -175,9 +175,8 @@ static void port_start(uint8 port) {
     port_write(port, PORT_CMD, cmd);
 }
 
-// Initialize a port's DMA structures. Returns -1 (port left stopped)
-// when the DMA pages cannot be allocated.
-static int port_init_dma(uint8 port) {
+// Initialize a port's DMA structures
+static void port_init_dma(uint8 port) {
     port_stop(port);
 
     // Command list (1KB, 1KB-aligned), received FIS buffer (256 bytes,
@@ -185,8 +184,6 @@ static int port_init_dma(uint8 port) {
     uint64 cl_phys = alloc_pages(1);
     uint64 fb_phys = alloc_pages(1);
     uint64 ct_phys = alloc_pages(1);
-    if (cl_phys == 0 || fb_phys == 0 || ct_phys == 0)
-        return -1;
 
     memset((void *)cl_phys, 0, 4096);
     cmd_lists[port] = (CmdHeader *)cl_phys;
@@ -213,7 +210,6 @@ static int port_init_dma(uint8 port) {
     port_write(port, PORT_IS, port_read(port, PORT_IS));
 
     port_start(port);
-    return 0;
 }
 
 // Issue a command on slot 0 and wait for completion
@@ -386,17 +382,10 @@ void ahci_init(void) {
     pci_config_write16(pci, 0x04, cmd);
 
     // Map ABAR
-    if (map_mmio_range(pci->bar[5], 0x10000) != 0) {
-        kprint("AHCI: cannot map ABAR\n");
-        return;
-    }
+    map_mmio_range(pci->bar[5], 0x10000);
     abar = (volatile uint8 *)pci->bar[5];
 
     dma_bounce = alloc_pages(AHCI_BOUNCE_PAGES);
-    if (dma_bounce == 0) {
-        kprint("AHCI: no memory for DMA bounce buffer\n");
-        return;
-    }
 
     // Enable AHCI mode
     hba_write(HBA_GHC, hba_read(HBA_GHC) | GHC_AE);
@@ -410,12 +399,7 @@ void ahci_init(void) {
         uint8 type = detect_port_type(i);
         if (type == AHCI_DEV_NULL) continue;
 
-        if (port_init_dma(i) != 0) {
-            kprint("AHCI: port ");
-            kprint_dec(i);
-            kprint(" skipped, no memory for DMA structures\n");
-            continue;
-        }
+        port_init_dma(i);
 
         AHCIDevice *dev = &devices[device_count];
         dev->type = type;
@@ -459,8 +443,6 @@ int ahci_read_sectors(uint32 dev_idx, uint64 lba, uint32 count, void *buf) {
     if (dev_idx >= device_count) return -1;
     AHCIDevice *dev = &devices[dev_idx];
     if (!dev->present) return -1;
-
-    if (dma_bounce == 0) return -1;
 
     // Read through the fixed bounce buffer in chunks of at most
     // AHCI_BOUNCE_SIZE. Also keeps each command within the single PRDT

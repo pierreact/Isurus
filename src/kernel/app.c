@@ -302,17 +302,9 @@ int app_launch(const char *manifest_path) {
     }
     }   // end of has_ip_config block
 
-    // User stack and private data region per core, allocated on first
-    // use and reused; the data region is zeroed here. Checked before the
-    // slot is filled so a failure leaves no state.
-    for (uint32 i = 0; i < manifest.core_count; i++) {
-        if (ap_user_prepare(manifest.cores[i]) < 0) {
-            kprint("APP: no memory for user stack or data region on core ");
-            kprint_dec(manifest.cores[i]);
-            putc('\n');
-            return -1;
-        }
-    }
+    // Zero each core's private data region (allocated at boot).
+    for (uint32 i = 0; i < manifest.core_count; i++)
+        ap_user_prepare(manifest.cores[i]);
 
     // Load binary; the rest of the slot (the image's .bss) is zeroed.
     uint64 load_addr = APP_LOAD_BASE + (uint64)slot * APP_REGION_SIZE;
@@ -398,7 +390,7 @@ int app_launch(const char *manifest_path) {
         }
     }
 
-    // Set entry addresses (user stacks were obtained above)
+    // Set entry addresses (user stacks are allocated at boot by cpu_init)
     for (uint32 i = 0; i < manifest.core_count; i++) {
         uint32 c = manifest.cores[i];
         ap_entry_addrs[c] = load_addr;

@@ -8,18 +8,20 @@
 //   mismatches: the data region is private. Each core fills it with a
 //            value unique to (core, round) and reads it back; a word
 //            changed by another core counts as a mismatch.
-// One line per core, built in a buffer and printed with one call, after
-// a delay proportional to cpu_index so lines from cores do not
-// interleave on the serial port.
+// One line per core, built in a buffer and printed with one call. Cores
+// print in cpu_index order through a turn counter in the shared .bss
+// (AP console output has no lock), so lines do not interleave on the
+// serial port. Assumes the manifest lists cores 1..N without a gap.
 
 #include "../libc/isurus.h"
 #include "../libc/stdio.h"
 
 #define ROUNDS   64
 #define MAX_CPU  16
-#define STAGGER  (4ULL << 20)   // spin iterations per cpu_index before printing
+#define TURN_SPIN_MAX (1ULL << 32)   // give up waiting for the previous core
 
 static uint64 bss_probe[MAX_CPU];
+static volatile uint32 print_turn;      // .bss, shared by all cores: last cpu_index that printed
 
 static char *put_str(char *d, const char *s) {
     while (*s) *d++ = *s++;
@@ -61,7 +63,7 @@ void _start(ThreadMeta *meta) {
             if (p[i] != v) mismatches++;
     }
 
-    for (volatile uint64 k = 0; k < (uint64)cpu * STAGGER; k++) {}
+    for (uint64 k = 0; print_turn != cpu - 1 && k < TURN_SPIN_MAX; k++) {}
 
     d = put_str(d, "[percore] cpu=");
     d = put_dec(d, cpu);
@@ -72,5 +74,6 @@ void _start(ThreadMeta *meta) {
     d = put_str(d, "\n");
     *d = 0;
     puts(line);
+    print_turn = cpu;
     exit();
 }

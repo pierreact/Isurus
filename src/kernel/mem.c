@@ -67,13 +67,16 @@ void init_memmgr() {
 
     alloc_limit = find_alloc_limit();
     if (alloc_limit == 0)
-        kprint("MEM: PAGING_LOCATION_END not in a usable E820 range, alloc_pages disabled\n");
+        kprint("MEM: PAGING_LOCATION_END not in a usable E820 range, first alloc_pages will halt\n");
     else
         kprint_long2hex(alloc_limit, " alloc_pages limit\n");
 }
 
 // Allocate n contiguous pages from above PAGING_LOCATION_END (high memory).
-// Returns 0 when the request does not fit below alloc_limit.
+// Boot-time only, never freed. Never returns 0: a request that does not
+// fit below alloc_limit halts the machine, so callers have no failure
+// path. All sizes are fixed at build time or by the hardware found at
+// boot, so a machine either boots with all its memory or does not boot.
 uint64 alloc_pages(uint32 n) {
     uint64 addr = (uint64)PAGING_LOCATION_END;
     uint64 size = (uint64)n * 4096;
@@ -82,8 +85,8 @@ uint64 alloc_pages(uint32 n) {
         kprint_dec(n);
         kprint(" pages) failed, next ");
         kprint_long2hex(addr, ", limit ");
-        kprint_long2hex(alloc_limit, "\n");
-        return 0;
+        kprint_long2hex(alloc_limit, "\nMEM: halting\n");
+        for (;;) __asm__ volatile("cli; hlt");
     }
     PAGING_LOCATION_END = (uint32)(addr + size);
     return addr;
@@ -92,11 +95,6 @@ uint64 alloc_pages(uint32 n) {
 // Allocate 64KB BSP stack from high memory, return stack top
 uint64 alloc_bsp_stack(void) {
     uint64 base = alloc_pages(16);      // 16 pages = 64KB
-    if (base == 0) {
-        // kmain switches RSP to the return value; no stack, no boot.
-        kprint("MEM: no memory for BSP stack, halting\n");
-        for (;;) __asm__ volatile("cli; hlt");
-    }
     kprint("BSP stack: ");
     kprint_long2hex(base, " - ");
     kprint_long2hex(base + 0x10000, "\n");
@@ -186,24 +184,19 @@ void heap_stats(uint32 *used_blocks, uint32 *free_blocks, uint32 *total_blocks) 
     *total_blocks = num_blocks;
 }
 
-// Allocate a new page-table page from above PAGING_LOCATION_END.
-// Returns 0 when alloc_pages fails.
+// Allocate a new page-table page from above PAGING_LOCATION_END
 static uint64 alloc_page_table(void) {
     uint64 addr = alloc_pages(1);
-    if (addr == 0) return 0;
     // Zero all 512 entries (4KB page)
     volatile uint64 *p = (volatile uint64 *)addr;
     for (int i = 0; i < 512; i++) p[i] = 0;
     return addr;
 }
 
-// Identity-map [phys_start, phys_start+size) as uncacheable MMIO.
-// Returns 0 on success, -1 if a page-table page could not be allocated
-// (pages mapped before the failure stay mapped).
-int map_mmio_range(uint64 phys_start, uint64 size) {
+// Identity-map [phys_start, phys_start+size) as uncacheable MMIO
+void map_mmio_range(uint64 phys_start, uint64 size) {
     uint64 end = phys_start + size;
     uint64 pml4t_addr = (uint64)PML4T_LOCATION;
-    int rc = 0;
 
     for (uint64 vaddr = phys_start; vaddr < end; vaddr += 4096) {
         uint32 pml4_idx = (vaddr >> 39) & 0x1FF;
@@ -216,7 +209,6 @@ int map_mmio_range(uint64 phys_start, uint64 size) {
         // Check/create PDPT entry
         if (!(pml4[pml4_idx] & PTE_PRESENT)) {
             uint64 new_pdpt = alloc_page_table();
-            if (new_pdpt == 0) { rc = -1; break; }
             pml4[pml4_idx] = new_pdpt | PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_PWT;
         }
         volatile uint64 *pdpt = (volatile uint64 *)(pml4[pml4_idx] & 0x000FFFFFFFFFF000ULL);
@@ -224,7 +216,6 @@ int map_mmio_range(uint64 phys_start, uint64 size) {
         // Check/create PD entry
         if (!(pdpt[pdpt_idx] & PTE_PRESENT)) {
             uint64 new_pd = alloc_page_table();
-            if (new_pd == 0) { rc = -1; break; }
             pdpt[pdpt_idx] = new_pd | PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_PWT;
         }
         volatile uint64 *pd = (volatile uint64 *)(pdpt[pdpt_idx] & 0x000FFFFFFFFFF000ULL);
@@ -232,7 +223,6 @@ int map_mmio_range(uint64 phys_start, uint64 size) {
         // Check/create PT entry
         if (!(pd[pd_idx] & PTE_PRESENT)) {
             uint64 new_pt = alloc_page_table();
-            if (new_pt == 0) { rc = -1; break; }
             pd[pd_idx] = new_pt | PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_PWT;
         }
         volatile uint64 *pt = (volatile uint64 *)(pd[pd_idx] & 0x000FFFFFFFFFF000ULL);
@@ -247,20 +237,11 @@ int map_mmio_range(uint64 phys_start, uint64 size) {
     uint64 cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     __asm__ volatile("mov %0, %%cr3" : : "r"(cr3));
-
-    if (rc != 0) {
-        kprint_long2hex(phys_start, " MEM: map_mmio_range failed at base\n");
-    }
-    return rc;
 }
 
-// Map APIC MMIO region (legacy wrapper). Called from kmain; the LAPIC
-// and IOAPIC are required, so a failure halts the boot.
+// Map APIC MMIO region (legacy wrapper)
 void map_mmio_region(void) {
-    if (map_mmio_range(0xFEC00000ULL, 0x300000ULL) != 0) {
-        kprint("MEM: cannot map LAPIC/IOAPIC MMIO, halting\n");
-        for (;;) __asm__ volatile("cli; hlt");
-    }
+    map_mmio_range(0xFEC00000ULL, 0x300000ULL);
     kprint("MEM: MMIO region 0xFEC00000-0xFEF00000 mapped\n");
 }
 

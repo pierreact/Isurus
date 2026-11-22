@@ -181,13 +181,7 @@ void pci_init(void) {
         // Map ECAM MMIO for this segment
         uint64 bus_count = (uint64)(segs[i].end_bus - segs[i].start_bus + 1);
         uint64 size = bus_count * 32 * 8 * 4096;  // buses * devices * functions * 4KB
-        if (map_mmio_range(segs[i].base_address, size) != 0) {
-            // Unmapped ECAM faults on access: enumerate only the
-            // segments mapped so far.
-            kprint("PCI: ECAM map failed, segments from here skipped\n");
-            ecam_segment_count = i;
-            break;
-        }
+        map_mmio_range(segs[i].base_address, size);
     }
 
     // Enumerate all segments

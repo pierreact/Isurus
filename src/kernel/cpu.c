@@ -1,5 +1,6 @@
 #include <types.h>
 #include <kernel/cpu.h>
+#include <kernel/loader.h>
 #include <arch/acpi.h>
 #include <kernel/mem.h>
 #include <drivers/monitor.h>
@@ -28,13 +29,15 @@ void cpu_init(void) {
 
     // Setup per-CPU data from ACPI info
     // AP stacks allocated from high memory (above 1MB, via PAGING_LOCATION_END)
+    // All per-AP memory is allocated here, once, for every AP: an app
+    // launch never allocates, so it cannot fail for lack of memory.
     for (uint32 i = 0; i < cpu_count; i++) {
         percpu[i].lapic_id = cpu_lapic_ids[i];
         percpu[i].cr3 = (uint64)PML4T_LOCATION;
         if (i > 0) {
             uint64 base = alloc_pages(AP_STACK_SIZE / 4096);
-            // stack_top == 0 tells ap_startup to leave this AP offline.
-            percpu[i].stack_top = base ? base + AP_STACK_SIZE : 0;
+            percpu[i].stack_top = base + AP_STACK_SIZE;
+            ap_user_alloc(i);   // ring 3 stack and private data region
         }
     }
 
