@@ -142,6 +142,10 @@ All APs share one CR3 today (Thread memory isolation below is the target design)
 
 All devices are accessed via polling from userspace (ring 3). No interrupts. BSP handles all interrupts in the system. Device MMIO is mapped into the thread's address space by the kernel.
 
+### Device trust
+
+Apps are trusted. The kernel does not enable DMA remapping (Intel VT-d, AMD-Vi); DMAR and IVRS are parsed for discovery only. A device sees physical addresses, so a thread that programs a device's descriptors can make it read or write any RAM, including kernel memory and other threads' memory. Per-thread page tables limit CPU accesses only, not device DMA.
+
 DMA buffers, driver state, and the thread touching the data are all on the same NUMA node. Zero copy. No cross-node memory access for I/O.
 
 ## Network stack
