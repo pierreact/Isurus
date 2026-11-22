@@ -91,7 +91,25 @@ typedef struct {
     uint8  reserved[3];
     uint8  nic_mac[6];
     uint8  reserved2[2];
+    uint32 reserved3;
+    uint64 data_base;   // this core's private data region
+    uint64 data_size;   // 128 KB
 } ThreadMeta;
+```
+
+### Per-core state
+
+All cores of an app run the same loaded image, so a `static` variable is one variable shared by every core. Put per-core writable state in the core's private data region (`meta->data_base`, `meta->data_size` bytes). The kernel zeroes the region and the image's `.bss` before every launch.
+
+```c
+typedef struct { uint64 counter; uint8 pool[64 * 1024]; } CoreState;
+
+void _start(ThreadMeta *meta) {
+    if (meta->data_size < sizeof(CoreState)) exit();
+    CoreState *st = (CoreState *)meta->data_base;
+    st->counter++;
+    exit();
+}
 ```
 
 ### Syscalls

@@ -83,7 +83,14 @@ typedef struct {
     uint8  reserved[3];
     uint8  nic_mac[6];      // MAC address copied from NIC
     uint8  reserved2[2];
+    uint32 reserved3;
+    uint64 data_base;       // this core's private data region (AP_DATA_SIZE), zeroed per launch
+    uint64 data_size;
 } ThreadMeta;
+
+// Layout shared with apps/libc/isurus.h; both files assert it.
+_Static_assert(__builtin_offsetof(ThreadMeta, data_base) == 32 &&
+               sizeof(ThreadMeta) == 48, "ThreadMeta layout changed: update apps/libc/isurus.h");
 
 #define THREAD_NUMA_UNKNOWN 0xFFFFFFFFu
 

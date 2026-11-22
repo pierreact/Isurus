@@ -148,6 +148,7 @@ Each thread can read its own `ThreadMeta` to learn its placement:
 - `numa_node`: which NUMA node that core belongs to
 - `nic_index`, `nic_segment`/`nic_bus`/`nic_dev`/`nic_func`: the assigned NIC's PCI address
 - `nic_mac[6]`: the MAC address of the assigned NIC
+- `data_base`, `data_size`: this core's private data region (128 KB, zeroed before each launch). The app image is shared by all its cores, so per-core writable state goes here, not in `static` variables (see [tutorial](tutorial.md) "Per-core state")
 
 The kernel passes a pointer to the per-CPU `ThreadMeta` in RDI when launching each AP's `_start` function. Also inspectable from the BSP shell via `sys.thread.ls`. See [Writing Your First Isurus Application](tutorial.md) for how to use it.
 

@@ -41,6 +41,9 @@ typedef struct {
     uint8  reserved[3];
     uint8  nic_mac[6];      // MAC address
     uint8  reserved2[2];
+    uint32 reserved3;
+    uint64 data_base;       // private data region of this core, zeroed per launch
+    uint64 data_size;       // 128 KB
 } ThreadMeta;
 ```
 

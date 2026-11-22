@@ -302,31 +302,22 @@ int app_launch(const char *manifest_path) {
     }
     }   // end of has_ip_config block
 
-    // User stacks: one per core, allocated on first use and reused.
-    // Checked before the slot is filled so a failure leaves no state.
+    // User stack and private data region per core, allocated on first
+    // use and reused; the data region is zeroed here. Checked before the
+    // slot is filled so a failure leaves no state.
     for (uint32 i = 0; i < manifest.core_count; i++) {
-        if (ap_user_stack_get(manifest.cores[i]) == 0) {
-            kprint("APP: no memory for user stack on core ");
+        if (ap_user_prepare(manifest.cores[i]) < 0) {
+            kprint("APP: no memory for user stack or data region on core ");
             kprint_dec(manifest.cores[i]);
             putc('\n');
             return -1;
         }
     }
 
-    // Load binary
+    // Load binary; the rest of the slot (the image's .bss) is zeroed.
     uint64 load_addr = APP_LOAD_BASE + (uint64)slot * APP_REGION_SIZE;
-    uint32 file_size = vfs_file_size(manifest.binary);
-    if (file_size == 0) {
-        kprint("APP: binary not found: ");
-        kprint((char *)manifest.binary);
-        putc('\n');
-        return -1;
-    }
-
-    if (vfs_read_file(manifest.binary, (void *)load_addr, file_size) < 0) {
-        kprint("APP: failed to read binary\n");
-        return -1;
-    }
+    uint32 file_size = app_image_load(manifest.binary, load_addr);
+    if (file_size == 0) return -1;
 
     // Fill slot (zero first to avoid stale data from previous use or uninitialized BSS)
     memset(app, 0, sizeof(AppSlot));

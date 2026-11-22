@@ -5,6 +5,7 @@
 #include <fs/vfs.h>
 #include <drivers/monitor.h>
 #include <arch/acpi.h>
+#include <kernel/app.h>
 
 // Per-AP state for ring 3 execution
 uint64 ap_user_stacks[MAX_CPUS];
@@ -18,6 +19,43 @@ uint64 ap_user_stack_get(uint32 cpu_idx) {
     if (ap_user_stacks[cpu_idx] == 0)
         ap_user_stacks[cpu_idx] = alloc_pages(USER_STACK_SIZE / 4096);
     return ap_user_stacks[cpu_idx];
+}
+
+// One private data region per AP, allocated on first use and reused.
+static uint64 ap_data_regions[MAX_CPUS];
+
+int ap_user_prepare(uint32 cpu_idx) {
+    if (cpu_idx >= MAX_CPUS) return -1;
+    if (ap_user_stack_get(cpu_idx) == 0) return -1;
+    if (ap_data_regions[cpu_idx] == 0)
+        ap_data_regions[cpu_idx] = alloc_pages(AP_DATA_SIZE / 4096);
+    if (ap_data_regions[cpu_idx] == 0) return -1;
+    memset((void *)ap_data_regions[cpu_idx], 0, AP_DATA_SIZE);
+    thread_meta[cpu_idx].data_base = ap_data_regions[cpu_idx];
+    thread_meta[cpu_idx].data_size = AP_DATA_SIZE;
+    return 0;
+}
+
+uint32 app_image_load(const char *path, uint64 load_addr) {
+    uint32 file_size = vfs_file_size(path);
+    if (file_size == 0) {
+        kprint("APP: binary not found: ");
+        kprint((char *)path);
+        putc('\n');
+        return 0;
+    }
+    if (file_size > APP_REGION_SIZE) {
+        kprint("APP: binary larger than app region: ");
+        kprint((char *)path);
+        putc('\n');
+        return 0;
+    }
+    if (vfs_read_file(path, (void *)load_addr, file_size) < 0) {
+        kprint("APP: failed to read binary\n");
+        return 0;
+    }
+    memset((void *)(load_addr + file_size), 0, APP_REGION_SIZE - file_size);
+    return file_size;
 }
 
 // AP ring 3 launcher. Called on each AP via ap_dispatch.
@@ -52,19 +90,9 @@ uint64 ap_run_ring3(uint64 cpu_idx) {
 }
 
 int loader_exec(const char *iso_path) {
-    uint32 file_size = vfs_file_size(iso_path);
-    if (file_size == 0) {
-        kprint("LOADER: file not found: ");
-        kprint((char *)iso_path);
-        kprint("\n");
-        return -1;
-    }
-
     // Load the binary at USER_LOAD_ADDR (identity-mapped by boot paging)
-    if (vfs_read_file(iso_path, (void *)USER_LOAD_ADDR, file_size) < 0) {
-        kprint("LOADER: failed to read binary\n");
-        return -1;
-    }
+    uint32 file_size = app_image_load(iso_path, USER_LOAD_ADDR);
+    if (file_size == 0) return -1;
 
     kprint("LOADER: loaded ");
     kprint((char *)iso_path);
@@ -76,8 +104,8 @@ int loader_exec(const char *iso_path) {
     // Allocate user stacks and set entry address for each AP
     for (uint32 i = 1; i < cpu_count; i++) {
         if (!percpu[i].running) continue;
-        if (ap_user_stack_get(i) == 0) {
-            kprint("LOADER: no memory for user stack, aborting\n");
+        if (ap_user_prepare(i) < 0) {
+            kprint("LOADER: no memory for user stack or data region, aborting\n");
             return -1;
         }
         ap_entry_addrs[i] = USER_LOAD_ADDR;
