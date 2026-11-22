@@ -93,7 +93,7 @@ T - ELF64 loader: replace flat binary loader with minimal ELF64 (PT_LOAD segment
 T - Fiber library: cooperative userland coroutines with work-stealing scheduler in apps/libc. One core, multiple tasks, explicit yield. For multiplexing NIC poll, disk poll, and compute without kernel threads.
 
 ### Kernel improvements
-T - App slot load address (bug): apps are flat binaries linked at 0x2000000 with -fno-PIC (apps/link.ld), but app_launch loads slot N at 0x2000000 + N*16 MB (src/kernel/app.c). An app in slot 1 or higher, running while slot 0 is in use, uses slot 0's absolute addresses. Seen 2026-11-21 in the NIC lock test: niclk_b loaded at 0x3000000 while niclk_a ran in slot 0; whether niclk_b ran correctly was not checked. Fix options: one app at a time at the link address, or link one binary per slot.
+T - App slot load address (bug): apps are flat binaries linked at 0x2000000 with -fno-PIC (apps/link.ld), but app_launch loads slot N at 0x2000000 + N*16 MB (src/kernel/app.c). An app in slot 1 or higher, running while slot 0 is in use, uses slot 0's absolute addresses. Seen 2026-11-21 in the NIC lock test: niclk_b loaded at 0x3000000 while niclk_a ran in slot 0; whether niclk_b ran correctly was not checked. Decision 2026-11-22: no interim fix (nothing is released); fixed by fix plan item 5 (per-core page tables: every app at the same virtual address, one physical slot each). Options not taken: one app at a time, a fixed slot per app chosen at build time, relocation at load (PIE).
 T - FAT32 write support (BSP system disk: /bin, /conf, /home, /log).
 T - Slab allocator (replace O(n) bitmap scan for frequent small allocations).
 T - Per-thread page tables (CR3 per AP).
