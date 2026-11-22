@@ -16,16 +16,17 @@
 #include <net/eth.h>
 #include <net/pktrace.h>
 
+// Packet pool in this core's private data region (meta->data_base,
+// zeroed by the kernel). Not a static array: the app image is shared by
+// all its cores, so a static pool would be one pool for every core.
 #define POOL_PAGES     32                 // 128 KB / core (32 * 4KB)
 #define PRINT_MASK     ((1ULL << 19) - 1) // stats cadence: every 2^19 polls
-// Bounded run per core: kernel app_launch dispatches cores serially
-// and blocks until each returns (src/kernel/app.c, marked TODO there).
-// Once the dispatcher goes non-blocking, remove MAX_ITERATIONS so each
-// pinned AP polls forever. Each poll hits SYS_NIC_RECV (~1 us in
+// Bounded run per core: app_launch dispatches cores in parallel, but
+// there is no command to stop an app, and the slot and its NIC locks
+// are released only when every core has returned. Remove the bound
+// once a stop command exists. Each poll hits SYS_NIC_RECV (~1 us in
 // QEMU), so 1 M iters ~ 1 s wall time per core.
 #define MAX_ITERATIONS (1ULL << 20)
-
-static uint8 pool_memory[POOL_PAGES * 4096];
 
 // Forward declaration so _start can be first in source order. Flat
 // binary entry is offset 0 of .text; gcc emits functions in source
@@ -46,11 +47,16 @@ void _start(ThreadMeta *meta) {
         exit();
     }
 
+    if (meta->data_size < POOL_PAGES * 4096) {
+        puts("[dpdk_l2] cpu="); print_dec(meta->cpu_index);
+        puts(" data region too small, exit\n");
+        exit();
+    }
+
     NetContext ctx;
     NetBackend be = nic_backend_make(meta);
-    memset(pool_memory, 0, sizeof(pool_memory));
     l2_init(&ctx, be, (void *)meta, 0 /* no IP at L2 */,
-            POOL_PAGES, pool_memory);
+            POOL_PAGES, (uint8 *)meta->data_base);
 
     puts("[dpdk_l2] cpu="); print_dec(meta->cpu_index);
     puts(" nic=");          print_dec(meta->nic_index);

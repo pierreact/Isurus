@@ -303,6 +303,23 @@ send_cmd "sys.proc.run /CONF/DUPCORE.INI" 3
 check "Duplicate core refused" "APP: core 1 listed twice"
 check_absent "Duplicate-core app not loaded" "APP: dupcore loaded"
 
+# Test: per-core data region and app .bss (apps/percore). Run twice: the
+# second run sees the first run's values unless the kernel zeroes the
+# data region and the image .bss on every launch. mismatches>0 means
+# two cores share a data region.
+send_cmd "sys.proc.run /CONF/PERCORE.INI" 5
+send_cmd "sys.proc.run /CONF/PERCORE.INI" 5
+PERCORE_OK=$(grep -ac "\[percore\] cpu=[123] region0=ok bss0=ok mismatches=0" "$SERIAL_LOG" || true)
+echo "  [percore lines ok: $PERCORE_OK of 6]"
+if [ "$PERCORE_OK" = "6" ]; then
+    echo "  PASS: Per-core data region private and zeroed, .bss zeroed"
+    PASS=$((PASS + 1))
+else
+    grep -a "\[percore\]" "$SERIAL_LOG" | sed 's/^/    /'
+    echo "  FAIL: Per-core data region private and zeroed, .bss zeroed"
+    FAIL=$((FAIL + 1))
+fi
+
 # Test: no alloc_pages leak per launch or file read. Cores 1-3 already
 # have their user stacks from the apps above, so the bump pointer
 # ("Paging structures end") must not move.

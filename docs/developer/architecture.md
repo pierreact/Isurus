@@ -124,10 +124,22 @@ The mode can be overridden at runtime via `sys.nic.mode per-core|per-numa`. Both
 
 - `cpu_index`, `numa_node`
 - `nic_index`, `nic_segment`, `nic_bus`, `nic_dev`, `nic_func`, `nic_mac[6]`
+- `data_base`, `data_size`: this core's private data region (see below)
+
+The layout is duplicated in `apps/libc/isurus.h`; both headers assert the offset of `data_base` and the struct size.
 
 This struct is filled at boot by `nic_assign()`. The kernel passes a pointer to the per-CPU `ThreadMeta` in RDI as the first argument to each AP's `_start()` function, so threads can read their own metadata without syscalls. Also visible from the BSP shell via `sys.thread.ls`.
 
 The binary loader (`loader_exec` in `src/kernel/loader.c`) reads a flat binary from the ISO via VFS, loads it at `0x2000000` (32 MB), and dispatches it to all APs via IRETQ. Each AP has its own TSS, GDT/IDT, and SYSCALL MSRs configured during AP startup.
+
+### App memory (until per-thread page tables)
+
+All APs share one CR3 today (Thread memory isolation below is the target design). Consequences:
+
+- One app image per launch, shared by all its cores. Its `.data` and `.bss` are one copy: a `static` writable variable is shared by every core of the app.
+- Per-core writable state goes in the private data region: `AP_DATA_SIZE` (128 KB) per AP, `alloc_pages` on the first launch on that core, reused, zeroed before every launch (`ap_user_prepare`, `src/kernel/loader.c`), passed as `meta->data_base` / `meta->data_size`. Not NUMA-local until per-node allocators exist.
+- The flat binary contains no `.bss`. `app_image_load` zeroes the rest of the app region (`APP_REGION_SIZE`) after the file, so `.bss` starts at zero on every launch, and refuses a file larger than the region.
+- Check: `apps/percore` (test/run_tests.sh) verifies region privacy and zeroing of the region and `.bss`.
 
 All devices are accessed via polling from userspace (ring 3). No interrupts. BSP handles all interrupts in the system. Device MMIO is mapped into the thread's address space by the kernel.
 

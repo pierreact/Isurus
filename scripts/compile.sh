@@ -58,6 +58,7 @@ cp "$OBJ" "$ISO_ROOT/boot/os.bin"
 cp apps/demo_app/demo_app "$ISO_ROOT/bin/demo_app" 2>/dev/null || true
 cp apps/dpdk_l2/dpdk_l2 "$ISO_ROOT/bin/dpdk_l2" 2>/dev/null || true
 cp apps/dpdk_l3/dpdk_l3 "$ISO_ROOT/bin/dpdk_l3" 2>/dev/null || true
+cp apps/percore/percore "$ISO_ROOT/bin/percore" 2>/dev/null || true
 cp data/pci.ids "$ISO_ROOT/data/pci.ids" 2>/dev/null || true
 for ini in conf/*.ini; do
     [ -f "$ini" ] && cp "$ini" "$ISO_ROOT/conf/" 2>/dev/null || true

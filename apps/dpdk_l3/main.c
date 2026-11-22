@@ -3,8 +3,8 @@
 // One pinned ring-3 thread per AP core. Each polls its local NIC,
 // runs L2+L3 through the shared libc stack, and answers ICMP Echo
 // Requests addressed to its manifest-supplied IP. Non-IP traffic is
-// ignored. Bounded by MAX_ITERATIONS like dpdk_l2 until the kernel
-// dispatcher goes non-blocking.
+// ignored. Bounded by MAX_ITERATIONS like dpdk_l2 (no stop command yet).
+// Packet pool in this core's private data region (meta->data_base).
 
 #include "../libc/isurus.h"
 #include "../libc/stdio.h"
@@ -19,8 +19,6 @@
 #define POOL_PAGES     32
 #define PRINT_MASK     ((1ULL << 19) - 1)
 #define MAX_ITERATIONS (1ULL << 20)
-
-static uint8 pool_memory[POOL_PAGES * 4096];
 
 static void print_ip(uint32 ip) {
     uint8 *b = (uint8 *)&ip;
@@ -47,10 +45,15 @@ void _start(ThreadMeta *meta) {
         exit();
     }
 
+    if (meta->data_size < POOL_PAGES * 4096) {
+        puts("[dpdk_l3] cpu="); print_dec(meta->cpu_index);
+        puts(" data region too small, exit\n");
+        exit();
+    }
+
     NetContext ctx;
     NetBackend be = nic_backend_make(meta);
-    memset(pool_memory, 0, sizeof(pool_memory));
-    l2_init(&ctx, be, (void *)meta, cfg.ip, POOL_PAGES, pool_memory);
+    l2_init(&ctx, be, (void *)meta, cfg.ip, POOL_PAGES, (uint8 *)meta->data_base);
     ctx.mask    = cfg.mask;
     ctx.gw      = cfg.gw;
     ctx.mtu     = cfg.mtu ? cfg.mtu : 1500;

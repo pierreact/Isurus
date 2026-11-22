@@ -34,9 +34,10 @@ BSP (kmalloc/kfree, kernel + BSP ring 3 only):
 AP ring-3 threads:
 - No malloc; sys_kmalloc forbidden from AP context
 - Each AP owns node_RAM / cores_on_node of its NUMA node
-- Working set is one static struct (preferred: explicit named fields) or static arrays; no runtime allocation on the data path
-- Allowed: libc bump/slab helper inside the app's static region, never reaching the kernel
-- Reference: apps/dpdk_l2/main.c (`static uint8 pool_memory[POOL_PAGES * 4096]`)
+- The app image (.data/.bss) is one copy shared by all cores of the app (one CR3 until per-thread page tables): no writable `static` per-core state
+- Per-core working set lives in the private data region `meta->data_base` / `meta->data_size` (128 KB, zeroed per launch); lay it out as one struct (preferred: explicit named fields); no runtime allocation on the data path
+- Allowed: libc bump/slab helper inside the data region, never reaching the kernel
+- Reference: apps/dpdk_l2/main.c (packet pool at `meta->data_base`); check: apps/percore
 
 ## Build and test
 Run in repo root, always via `devbox run -- <cmd>` (enforced by hook):

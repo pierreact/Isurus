@@ -56,7 +56,8 @@ IOAPIC_BASE     = 0xFEC00000
 
 Low memory: kernelEnd to 0x9F000 (~580 KB) - used as heap
 High memory: PAGING_LOCATION_END to the alloc_pages limit (end of the usable E820 entry, capped at APP_LOAD_BASE 0x2000000) - bump allocator, never freed, see architecture.md "Page allocator"
-App images: 0x2000000+ (16 MB per app slot)
+App images: 0x2000000+ (16 MB per app slot; the part after the file, the image .bss, is zeroed per launch)
+AP data regions: 128 KB per AP in high memory (alloc_pages on first launch, zeroed per launch, ThreadMeta.data_base)
 
 ## Stack
 

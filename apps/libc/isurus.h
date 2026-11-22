@@ -17,7 +17,16 @@ typedef struct {
     uint8  reserved[3];
     uint8  nic_mac[6];
     uint8  reserved2[2];
+    uint32 reserved3;
+    // This core's private data region, zeroed by the kernel before each
+    // launch. The app image (.data/.bss) is shared by all cores of the
+    // app: per-core writable state goes here, not in static variables.
+    uint64 data_base;
+    uint64 data_size;
 } ThreadMeta;
+
+_Static_assert(__builtin_offsetof(ThreadMeta, data_base) == 32 &&
+               sizeof(ThreadMeta) == 48, "ThreadMeta layout changed: update src/include/kernel/cpu.h");
 
 #define NIC_NONE 0xFFFFFFFFu
 #define THREAD_NUMA_UNKNOWN 0xFFFFFFFFu

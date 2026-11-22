@@ -1,5 +1,20 @@
 # Changelog
 
+## [2026-11-22] - Apps: per-core data region, .bss zeroed per launch
+
+### Fixed
+- dpdk_l2 and dpdk_l3 used one `static` 128 KB packet pool for all cores of the app (the image is loaded once and shared). Each core zeroed and re-initialized the same pool while the others used it. Measured with apps/percore using a static buffer: 96922 to 307596 words per core overwritten by other cores; with the data region: 0.
+- The kernel never zeroed an app's `.bss` (the flat binary does not contain it), so `.bss` started with the previous app's data. app_image_load now zeroes the app region after the file, and refuses a file larger than the region (APP_REGION_SIZE).
+
+### Added
+- ThreadMeta `data_base` / `data_size`: a private 128 KB data region per AP (AP_DATA_SIZE), allocated on the first launch on that core, zeroed before every launch (ap_user_prepare). Layout asserted in both cpu.h and apps/libc/isurus.h.
+- apps/percore and conf/percore.ini: test app that checks the region and `.bss` are zero at entry and the region is private. Run twice in test/run_tests.sh.
+
+### Changed
+- dpdk_l2, dpdk_l3: packet pool at `meta->data_base`. dpdk_l2 MAX_ITERATIONS comment: the dispatch is parallel; the bound stays because no command stops an app.
+- loader_exec and app_launch share app_image_load and ap_user_prepare.
+- Docs: architecture.md "App memory (until per-thread page tables)", ThreadMeta fields; memory-map.md; tutorial.md "Per-core state". CLAUDE.md AP rules: per-core state in the data region, not in `static` variables.
+
 ## [2026-11-21] - alloc_pages: bounded, no per-operation leaks
 
 ### Fixed
