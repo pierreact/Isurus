@@ -26,7 +26,7 @@ D - Parse SLIT (System Locality Information Table) for latency distance matrix.
 D - Parse MCFG for PCIe ECAM base address (needed to enumerate and configure NICs).
 D - Parse HPET for high-precision timer (replace PIT, nanosecond resolution).
 D - FACP: use PM timer for precise timing, use reset register for cleaner reboot.
-D - DMAR/IVRS: IOMMU support for DMA protection and device isolation.
+D - DMAR/IVRS parsing: IOMMU unit discovery only. DMA remapping is not used (architecture.md "Device trust").
 D - ISO-first boot workflow: xorriso El Torito no-emul ISO, QEMU boots from ISO, data disk optional.
 D - Move shell from kernel to ring 3 on BSP (syscalls into ring 0 for kernel services).
 D - GDT64 expansion: ring 3 code/data segments, TSS descriptor.
