@@ -31,8 +31,10 @@ when the bug was introduced three releases ago and only manifests
 when the kernel grows past a threshold and the damage starts landing
 on live code.
 
-The design principle of Isurus is therefore: **remove categories of
-bug by construction rather than trying to detect them at runtime.**
+The design principle of Isurus is therefore, after performance:
+**remove categories of bug by construction rather than trying to
+detect them at runtime.** Where the two conflict, the design with
+the better data-path performance wins.
 Wherever a traditional kernel says "use a lock," "retry on
 collision," "handle the race," or "log and recover," Isurus prefers
 to shape the system so the hazard cannot occur in the first place.

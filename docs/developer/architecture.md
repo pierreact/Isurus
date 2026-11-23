@@ -6,7 +6,7 @@
 
 Decisions and rationale behind kernel design choices.
 
-Performance is the only driver for this project.
+Performance is the first driver for this project: when two designs conflict, the one with the better data-path performance wins. Removing categories of bug by construction (README "Design doctrine") comes second and applies wherever it costs no data-path performance.
 It's meant to live in an isolated environment.
 
 ## Boot media model
