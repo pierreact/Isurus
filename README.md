@@ -109,7 +109,7 @@ for the implementation.
 
 ## Design doctrine
 
-The kernel is meant to be **as small and basic as possible**, retaining maximum performance and minimum latency, yet with a very optimized design for the targeted tasks. Everything in the system is shaped around one principle: **eliminate categories of bug by construction rather than detect them at runtime.**
+The kernel is meant to be **as small and basic as possible**, retaining maximum performance and minimum latency, yet with a very optimized design for the targeted tasks. Performance comes first. The second principle, applied wherever it costs no data-path performance, is: **eliminate categories of bug by construction rather than detect them at runtime.**
 
 Kernel bugs compound silently -- a bit-flip deep in the kernel may sit dormant for years until a layout shift brings it to a live code path. Runtime checks (asserts, sanitizers, watchdogs) only help on the build that caused the damage, not on the build where it finally fires. So Isurus accepts several up-front tradeoffs -- static sizing, one-thread-per-core, no context switching on APs, single-writer shared memory, per-thread address spaces, polled I/O only, placement as the only scheduling decision -- and in exchange excludes whole classes of bug (data-path allocator corruption, AP data races, lock contention, cache-coherence races, interrupt-timing Heisenbugs, scheduler non-determinism). You pay by sizing your working set ahead of time; you gain a system that is correct by construction within its envelope.
 
