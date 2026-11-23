@@ -59,6 +59,17 @@ High memory: PAGING_LOCATION_END to the alloc_pages limit (end of the usable E82
 App images: 0x2000000+ (16 MB per app slot; the part after the file, the image .bss, is zeroed per launch)
 AP data regions: 128 KB per AP in high memory (alloc_pages at boot, zeroed per launch, ThreadMeta.data_base; interim until per-thread page tables)
 
+## Memory types
+
+The page-level type is the PAT entry selected by the leaf entry's PAT, PCD and PWT bits. The kernel does not program IA32_PAT; it uses the power-on value (0x0007040600070406: entry 0 WB, entry 3 UC). The MTRRs set by firmware can lower the type further (an MTRR UC range wins).
+
+| Range | Bits | Type |
+|-------|------|------|
+| Boot identity map (all RAM up to the highest E820 address) | PWT=0 PCD=0 | WB |
+| MMIO (`map_mmio_range`: LAPIC/IOAPIC/HPET 0xFEC00000-0xFEF00000, legacy VGA 0xA0000-0xBFFFF, PCI ECAM, device BARs) | PWT=1 PCD=1 | UC |
+
+`map_mmio_range` also sets UC on pages the boot identity map already covers. Boot prints `IA32_PAT` and the type of one RAM, IOAPIC, LAPIC and VGA page (`MEM: page type ...`).
+
 ## Stack
 
 | Mode | Address | Notes |

@@ -5,7 +5,8 @@
 %define PAGE_PRESENT                 1b                 ; - Present in memory
 %define PAGE_WRITEABLE              10b                 ; - Read / Write
 %define PAGE_NOT_PROTECTED         100b                 ; - Defeat protection, memory is accessible by CPL > 0
-%define PAGE_WRITETHROUGH_CACHING 1000b                 ; - Use Write through caching
+                                                        ; PWT and PCD stay 0: PAT entry 0, write-back (WB) with the power-on PAT.
+                                                        ; MMIO pages are set to UC by map_mmio_range.
 
 
 
@@ -143,7 +144,7 @@ setup_64_bits_paging_structures:
                                                         ;
         ;mov edx, eax                                    ; Set the memory address of the PDPT in the PML4E, episode 2
                                                         ; PML4E flags:
-        or edx, PAGE_PRESENT | PAGE_WRITEABLE | PAGE_NOT_PROTECTED | PAGE_WRITETHROUGH_CACHING
+        or edx, PAGE_PRESENT | PAGE_WRITEABLE | PAGE_NOT_PROTECTED
                                                         ;
 ;mov ecx, 'PML4'
 ;mov ecx, 'E   '
@@ -243,7 +244,7 @@ create_pdpt:                                            ;
                                                         ;
         mov edx, eax                                    ; Set the memory address of the PDT, part 2
                                                         ;
-        or edx, PAGE_PRESENT | PAGE_WRITEABLE | PAGE_NOT_PROTECTED | PAGE_WRITETHROUGH_CACHING
+        or edx, PAGE_PRESENT | PAGE_WRITEABLE | PAGE_NOT_PROTECTED
                                                         ;
                                                         ; Now that our 64 bits PDPE is built, let's write it in the PDPT
 ;mov ecx, 'PDPE'
@@ -335,7 +336,7 @@ create_pdt:                                            ;
         mov eax, [PAGING_LOCATION_END]                  ; Location for the new PTT
                                                         ;
         mov edx, eax                                    ; Set the memory address of the PTT, part 2
-        or edx, PAGE_PRESENT | PAGE_WRITEABLE | PAGE_NOT_PROTECTED | PAGE_WRITETHROUGH_CACHING
+        or edx, PAGE_PRESENT | PAGE_WRITEABLE | PAGE_NOT_PROTECTED
                                                         ;
                                                         ; Now that our 64 bits PDE is built, let's write it in the PDT
                                                         ;
@@ -433,7 +434,7 @@ create_ptt:                                            ;
         mov edx, eax                                    ; Set the memory address of the physical page, part 2
         shl edx, 12                                     ;
                                                         ;
-        or edx, PAGE_PRESENT | PAGE_WRITEABLE | PAGE_NOT_PROTECTED | PAGE_WRITETHROUGH_CACHING
+        or edx, PAGE_PRESENT | PAGE_WRITEABLE | PAGE_NOT_PROTECTED
 
                                                         ; Now that our 64 bits PTE is built, let's write it in the PTT
                                                         ;
