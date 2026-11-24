@@ -8,6 +8,19 @@
 - Review prompt .gemini/commands/isurus-review.toml (x86-64, SMP, NUMA, DMA priorities; severity and confirmed/potential per finding), GEMINI.md (imports CLAUDE.md, points to docs), .geminiignore.
 - Docs: developer/gemini-review.md (setup, permissions, security model, cost).
 
+## [2026-11-24] - Paging: runtime page tables map all RAM with large pages
+
+### Fixed
+- RAM above 4 GB was never mapped: the 32-bit boot code picks the highest E820 entry by comparing only the low 32 bits of the base. Measured before: PAGING_LOCATION_END 0x908000 with both -m 2G and -m 8G (4 GB mapped in both cases). The runtime tables map every E820 RAM range, also above 4 GB.
+
+### Changed
+- New paging_init (src/kernel/paging.c), called after heap_init, replaces the 32-bit boot identity map: 0-2 MB in 4 KB pages, E820 usable and ACPI ranges with 1 GB, 2 MB or 4 KB pages, nothing else. Measured in QEMU: -m 2G maps 2 GB with 1022 2 MB pages and 991 4 KB pages (default CPU, no 1 GB pages); -m 6G with pdpe1gb adds four 1 GB pages above 4 GB.
+- MMIO and reserved ranges are no longer mapped as RAM. map_mmio_range creates their pages (with the User bit, as all pages until per-thread page tables) and halts if an MMIO address falls in a RAM large page.
+- ACPI tables are mapped UC before they are read when they are outside E820 RAM; tables longer than 4 MB are ignored. The ACPI reset register is mapped UC when it is in memory space.
+
+### Added
+- Boot log: page counts per size, and the type of the first RAM page at or above 4 GB. Tests: 2 MB pages in the main boot; the TAP phase boots with -m 6G and -cpu qemu64,+pdpe1gb and checks 1 GB pages and WB RAM above 4 GB.
+
 ## [2026-11-22] - Paging: RAM write-back, MMIO uncacheable
 
 ### Fixed

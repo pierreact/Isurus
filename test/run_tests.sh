@@ -195,6 +195,10 @@ check "IOAPIC page uncacheable" "MEM: page type IOAPIC 0xFEC00000: UC$"
 check "LAPIC page uncacheable" "MEM: page type LAPIC 0xFEE00000: UC$"
 check "VGA page uncacheable" "MEM: page type VGA 0xB8000: UC$"
 
+# Test: paging_init maps E820 RAM with large pages (2 MB pages present;
+# the default QEMU CPU has no 1 GB pages).
+check "RAM mapped with 2 MB pages" "PAGING: RAM .* 2M [1-9]"
+
 # Test: TSS and SYSCALL infrastructure initialized during boot
 check "TSS loaded" "TSS: BSP TSS loaded"
 
@@ -388,15 +392,18 @@ echo "Phase 2: L2 network tests (TAP)..."
 L2_SERIAL_LOG="test/serial_l2.log"
 mkfifo test/qemu.in test/qemu.out
 
+# 6 GB and 1 GB pages: Q35 puts RAM above 2 GB at 4 GB and up, so this
+# boot checks that paging_init maps RAM above 4 GB with 1 GB pages.
 qemu-system-x86_64 \
     -machine q35 \
-    -m 2G \
+    -cpu qemu64,+pdpe1gb \
+    -m 6G \
     -display none \
     -monitor none \
     -serial pipe:test/qemu \
     -smp "4,sockets=2,cores=2,threads=1" \
-    -object "memory-backend-ram,id=mem0,size=1G" \
-    -object "memory-backend-ram,id=mem1,size=1G" \
+    -object "memory-backend-ram,id=mem0,size=3G" \
+    -object "memory-backend-ram,id=mem1,size=3G" \
     -numa "node,nodeid=0,cpus=0-1,memdev=mem0" \
     -numa "node,nodeid=1,cpus=2-3,memdev=mem1" \
     -device pxb-pcie,id=pcie.1,bus_nr=10,bus=pcie.0,numa_node=0 \
@@ -434,6 +441,9 @@ SERIAL_LOG_BACKUP="$SERIAL_LOG"
 SERIAL_LOG="$L2_SERIAL_LOG"
 echo "Waiting for L2 phase boot..."
 sleep 12
+
+check "1 GB pages used" "PAGING: RAM .* 1G [1-9].*(1G pages supported)"
+check "RAM above 4 GB write-back" "MEM: page type RAM above 4 GB: WB"
 
 # Debug: capture what's actually on tap0 during ARP test.
 # arping and tcpdump need raw sockets (sudo) so they must be

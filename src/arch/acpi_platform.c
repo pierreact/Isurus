@@ -3,6 +3,7 @@
 
 #include <types.h>
 #include <arch/acpi.h>
+#include <kernel/mem.h>
 #include "acpi_internal.h"
 
 ACPIPCIEConfigSegment pcie_segments[MAX_PCIE_SEGMENTS];
@@ -45,6 +46,8 @@ void parse_fadt(ACPISDTHeader *hdr) {
         reset_reg_info.address = fadt->reset_reg.address;
         reset_reg_info.value = fadt->reset_value;
         reset_reg_info.present = 1;
+        if (reset_reg_info.space_id == 0)      // system memory: not RAM, map it UC
+            map_mmio_range(reset_reg_info.address & ~0xFFFULL, 0x1000);
     }
 }
 

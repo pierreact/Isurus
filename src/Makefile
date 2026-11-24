@@ -16,6 +16,7 @@ OBJECTS=    boot/kmain.o \
             arch/acpi_lsacpi.o \
             arch/aml.o \
             kernel/mem.o \
+            kernel/paging.o \
             kernel/cpu.o \
             kernel/task.o \
             kernel/tss.o \

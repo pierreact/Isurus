@@ -2,6 +2,7 @@
 #include <drivers/monitor.h>
 #include <kernel/mem.h>
 #include <kernel/app.h>
+#include <kernel/paging.h>
 
 extern uint8 data_counter_mmap_entries;
 extern uint32 MEMMAP_START;
@@ -16,6 +17,7 @@ extern uint8 kernelEnd[];
 #define PTE_PWT       0x08
 #define PTE_PCD       0x10
 #define PTE_PAT_4K    0x80          // PAT bit in a 4 KB PTE (PS bit in a PDE/PDPTE)
+#define PTE_PS        0x80          // PDPTE: 1 GB page, PDE: 2 MB page
 
 // Heap: dynamic range from end of BSS to 0x9F000
 #define BLOCK_SIZE      4096
@@ -194,6 +196,13 @@ static uint64 alloc_page_table(void) {
     return addr;
 }
 
+// Large pages map only E820 RAM (paging_init), so MMIO inside one means
+// the firmware memory map reports a device range as RAM.
+static void mmio_in_large_page(uint64 vaddr) {
+    kprint_long2hex(vaddr, " MEM: MMIO address inside a RAM large page\nMEM: halting\n");
+    for (;;) __asm__ volatile("cli; hlt");
+}
+
 // Identity-map [phys_start, phys_start+size) as uncacheable MMIO
 void map_mmio_range(uint64 phys_start, uint64 size) {
     uint64 end = phys_start + size;
@@ -219,6 +228,7 @@ void map_mmio_range(uint64 phys_start, uint64 size) {
             uint64 new_pd = alloc_page_table();
             pdpt[pdpt_idx] = new_pd | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
         }
+        if (pdpt[pdpt_idx] & PTE_PS) mmio_in_large_page(vaddr);
         volatile uint64 *pd = (volatile uint64 *)(pdpt[pdpt_idx] & 0x000FFFFFFFFFF000ULL);
 
         // Check/create PT entry
@@ -226,13 +236,17 @@ void map_mmio_range(uint64 phys_start, uint64 size) {
             uint64 new_pt = alloc_page_table();
             pd[pd_idx] = new_pt | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
         }
+        if (pd[pd_idx] & PTE_PS) mmio_in_large_page(vaddr);
         volatile uint64 *pt = (volatile uint64 *)(pd[pd_idx] & 0x000FFFFFFFFFF000ULL);
 
         // Map the page: identity map, UC (PCD|PWT, PAT bit 0) for MMIO.
-        // The boot identity map already covers MMIO below the highest E820
-        // address as normal RAM pages: set UC on those too, keep other bits.
+        // A present 4 KB page (VGA in the first 2 MB) gets UC too, other
+        // bits kept.
+        // PTE_USER: BSP ring-3 tasks call driver code that reads MMIO
+        // (shell sys.nic.ls -> nic_link_status), as for all pages until
+        // per-thread page tables.
         if (!(pt[pt_idx] & PTE_PRESENT)) {
-            pt[pt_idx] = vaddr | PTE_PRESENT | PTE_WRITABLE | PTE_PCD | PTE_PWT;
+            pt[pt_idx] = vaddr | PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_PCD | PTE_PWT;
         } else {
             pt[pt_idx] = (pt[pt_idx] & ~(uint64)(PTE_PAT_4K | PTE_PCD | PTE_PWT)) | PTE_PCD | PTE_PWT;
         }
@@ -298,6 +312,11 @@ void map_mmio_region(void) {
     report_mem_type("MEM: page type IOAPIC 0xFEC00000: ", 0xFEC00000ULL, pat);
     report_mem_type("MEM: page type LAPIC 0xFEE00000: ", 0xFEE00000ULL, pat);
     report_mem_type("MEM: page type VGA 0xB8000: ", 0xB8000ULL, pat);
+    uint64 high = paging_first_ram_above_4g();
+    if (high) {
+        kprint_long2hex(high, "");
+        report_mem_type(" MEM: page type RAM above 4 GB: ", high, pat);
+    }
 }
 
 // Prevent GCC from replacing these loops with calls to themselves
