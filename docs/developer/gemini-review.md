@@ -12,7 +12,7 @@ Files:
 
 1. `gate` (token: `pull-requests: read`): decides if a review runs. Refuses fork PRs for every trigger, closed PRs, and automatic reviews within the cooldown.
 2. `review` (token: `contents: read`, `pull-requests: read`; holds `GEMINI_API_KEY`): checks out the PR head without credentials, writes the PR metadata, the line-annotated diff and the previous bot comments to `.gemini/review/`, runs `google-github-actions/run-gemini-cli` with the prompt `/isurus-review`. Gemini returns JSON. A jq step validates it: severity and side normalized, inline comments only on lines present in the diff (others go to the summary), findings already posted dropped, at most `MAX_COMMENTS`, `@mentions` broken.
-3. `post` (token: `pull-requests: write`; no checkout, no model, no Gemini key): rebuilds the request from known fields, forces `event: COMMENT`, posts one review. If GitHub rejects the inline placement, it posts the findings in the review body.
+3. `post` (token: `pull-requests: write`; no checkout, no model, no Gemini key): rebuilds the request from known fields, forces `event: COMMENT`, posts one review. If GitHub rejects the inline placement, it posts the findings in the review body. If the review job failed, it posts the failure reason instead.
 
 Triggers:
 
@@ -62,7 +62,8 @@ Free tier: "Content used to improve our products" (https://ai.google.dev/gemini-
 - Free-tier rate limits (RPM, TPM, RPD) are per project and shown only in AI Studio (https://aistudio.google.com/rate-limit); the docs page does not list them per model. Open question: the RPD of `gemini-3.8-flash` for this project.
 - Requests per review: one per model turn, at most `maxSessionTurns` (20). Assumption, not measured; check `stats` in the Gemini step log of the first run.
 - Diffs above `MAX_DIFF_BYTES` (200000) are skipped. Open question: the value is not derived from a measured token count.
-- Quota exhausted or API error: the review job reports a warning and posts nothing; PR checks stay green. Retry with `/gemini-review`.
+- HTTP 503 (model overloaded, observed on `gemini-3.8-flash` on 2026-11-25: 10 attempts in 3.7 min, all 503) or HTTP 429 (quota): the review runs once more with `GEMINI_FALLBACK_MODEL` (`gemini-3.6-flash`, also "Free of charge" on the free tier).
+- Any other failure, or the fallback fails too: the `post` job posts a comment-only review "Gemini review not posted: <reason>" with the run link; PR checks stay green. A failure notice does not start the cooldown. Retry with `/gemini-review`.
 - GitHub Actions minutes: free for standard GitHub-hosted runners in public repositories (https://docs.github.com/en/billing/concepts/product-billing/github-actions).
 
 ## First test

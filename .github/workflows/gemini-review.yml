@@ -27,9 +27,25 @@ on:
 permissions: {}
 
 env:
-  # Free tier model, see docs/developer/gemini-review.md "Cost".
+  # Free tier models, see docs/developer/gemini-review.md "Cost". The fallback
+  # runs only when the main model answers 503 (overloaded) or 429 (quota).
   GEMINI_MODEL: 'gemini-3.8-flash'
+  GEMINI_FALLBACK_MODEL: 'gemini-3.6-flash'
   GEMINI_CLI_VERSION: '0.70.0'
+  # The action runs gemini with --yolo: every tool Gemini can see runs without
+  # confirmation. tools.core is the allowlist that keeps it read-only; no
+  # mcpServers are configured.
+  GEMINI_SETTINGS: |-
+    {
+      "model": { "maxSessionTurns": 20 },
+      "tools": {
+        "core": ["read_file", "list_directory", "glob", "grep_search"],
+        "exclude": ["run_shell_command", "write_file", "replace", "web_fetch", "google_web_search"]
+      },
+      "context": { "fileName": "GEMINI.md" },
+      "privacy": { "usageStatisticsEnabled": false },
+      "telemetry": { "enabled": false }
+    }
   # Automatic reviews after a push are skipped when the previous Gemini review
   # of the PR is younger than this. Manual requests ignore it.
   COOLDOWN_MINUTES: '30'
@@ -111,6 +127,7 @@ jobs:
       cancel-in-progress: true
     outputs:
       status: ${{ steps.validate.outputs.status }}
+      reason: ${{ steps.validate.outputs.reason }}
       payload: ${{ steps.validate.outputs.payload }}
     steps:
       - name: Checkout PR head
@@ -215,20 +232,27 @@ jobs:
           upload_artifacts: 'false'
           workflow_name: 'gemini-review'
           prompt: '/isurus-review'
-          # The action runs gemini with --yolo: every tool Gemini can see runs
-          # without confirmation. tools.core is the allowlist that keeps it
-          # read-only; no mcpServers are configured.
-          settings: |-
-            {
-              "model": { "maxSessionTurns": 20 },
-              "tools": {
-                "core": ["read_file", "list_directory", "glob", "grep_search"],
-                "exclude": ["run_shell_command", "write_file", "replace", "web_fetch", "google_web_search"]
-              },
-              "context": { "fileName": "GEMINI.md" },
-              "privacy": { "usageStatisticsEnabled": false },
-              "telemetry": { "enabled": false }
-            }
+          settings: ${{ env.GEMINI_SETTINGS }}
+
+      - name: Run Gemini review (fallback model)
+        id: gemini_fallback
+        if: >-
+          steps.prep.outputs.skip != 'true'
+          && steps.gemini.outcome == 'failure'
+          && (contains(steps.gemini.outputs.error, '"code": 503')
+            || contains(steps.gemini.outputs.error, '"code": 429'))
+        continue-on-error: true
+        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
+        env:
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          gemini_cli_version: ${{ env.GEMINI_CLI_VERSION }}
+          gemini_model: ${{ env.GEMINI_FALLBACK_MODEL }}
+          upload_artifacts: 'false'
+          workflow_name: 'gemini-review'
+          prompt: '/isurus-review'
+          settings: ${{ env.GEMINI_SETTINGS }}
 
       - name: Validate findings
         id: validate
@@ -237,6 +261,9 @@ jobs:
           OUTCOME: ${{ steps.gemini.outcome }}
           RESPONSE: ${{ steps.gemini.outputs.summary }}
           ERRORS: ${{ steps.gemini.outputs.error }}
+          FB_OUTCOME: ${{ steps.gemini_fallback.outcome }}
+          FB_RESPONSE: ${{ steps.gemini_fallback.outputs.summary }}
+          FB_ERRORS: ${{ steps.gemini_fallback.outputs.error }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
         run: |
@@ -246,13 +273,36 @@ jobs:
             echo "::warning title=Gemini review not posted::$1"
             echo "Gemini review not posted: $1" >> "$GITHUB_STEP_SUMMARY"
             echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "reason=$1" >> "$GITHUB_OUTPUT"
             exit 0
           }
-          if [[ "$OUTCOME" != "success" ]]; then
-            if grep -qiE 'RESOURCE_EXHAUSTED|429|quota' <<<"$ERRORS"; then
-              fail "Gemini API quota exhausted (free tier). Retry later with /gemini-review."
+          # Reason from the HTTP code in the Gemini CLI error JSON. Do not match
+          # the word "quota": Gemini CLI names its retry error RetryableQuotaError
+          # also for 503.
+          reason_of() {
+            if grep -qE '"code": 503|status: 503' <<<"$1"; then
+              echo "model $2 overloaded (HTTP 503 UNAVAILABLE)"
+            elif grep -qE '"code": 429|status: 429|RESOURCE_EXHAUSTED' <<<"$1"; then
+              echo "free-tier quota of $2 exhausted (HTTP 429)"
+            elif grep -qE 'No authentication method provided' <<<"$1"; then
+              echo "secret GEMINI_API_KEY is not set"
+            elif grep -qE '"code": 40[0-9]' <<<"$1"; then
+              echo "Gemini API rejected the request for $2 ($(grep -oE '"code": 40[0-9]' <<<"$1" | head -1))"
+            else
+              echo "Gemini CLI failed with $2"
             fi
-            fail "Gemini CLI failed. See the 'Run Gemini review' step log."
+          }
+          [[ -n "$GEMINI_API_KEY" ]] || fail "secret GEMINI_API_KEY is not set."
+          if [[ "$OUTCOME" == "success" ]]; then
+            :
+          elif [[ "$FB_OUTCOME" == "success" ]]; then
+            echo "::notice::$(reason_of "$ERRORS" "$GEMINI_MODEL"); review made by $GEMINI_FALLBACK_MODEL"
+            RESPONSE="$FB_RESPONSE"
+            GEMINI_MODEL="$GEMINI_FALLBACK_MODEL"
+          elif [[ "$FB_OUTCOME" == "failure" ]]; then
+            fail "$(reason_of "$ERRORS" "$GEMINI_MODEL"); fallback: $(reason_of "$FB_ERRORS" "$GEMINI_FALLBACK_MODEL")."
+          else
+            fail "$(reason_of "$ERRORS" "$GEMINI_MODEL")."
           fi
           printf '%s\n' "$RESPONSE" > "$d/response.txt"
           if [[ -n "$GEMINI_API_KEY" ]] && grep -qF -- "$GEMINI_API_KEY" "$d/response.txt"; then
@@ -340,14 +390,32 @@ jobs:
 
   post:
     needs: [gate, review]
-    if: needs.review.outputs.status == 'ok'
+    if: contains(fromJSON('["ok", "failed"]'), needs.review.outputs.status)
     runs-on: ubuntu-latest
     timeout-minutes: 3
     # The only job with a write token. It runs no checkout and no model.
     permissions:
       pull-requests: write
     steps:
+      - name: Post failure notice
+        if: needs.review.outputs.status == 'failed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.gate.outputs.pr }}
+          REASON: ${{ needs.review.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # No BOT_MARKER: a failure notice does not start the cooldown.
+          jq -n --arg reason "$REASON" --arg run "$RUN_URL" '{
+              event: "COMMENT",
+              body: "Gemini review not posted: \($reason)\n\nRun: \($run)\n\nRetry: comment `/gemini-review` on this PR."
+            }' > notice.json
+          gh api --method POST "repos/$REPO/pulls/$PR/reviews" --input notice.json > /dev/null
+
       - name: Post comment-only review
+        if: needs.review.outputs.status == 'ok'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
