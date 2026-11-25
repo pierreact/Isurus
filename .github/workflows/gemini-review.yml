@@ -29,8 +29,8 @@ permissions: {}
 env:
   # Free tier models, see docs/developer/gemini-review.md "Cost". The fallback
   # runs only when the main model answers 503 (overloaded) or 429 (quota).
-  GEMINI_MODEL: 'gemini-3.8-flash'
-  GEMINI_FALLBACK_MODEL: 'gemini-3.6-flash'
+  GEMINI_MODEL: 'gemini-4-hydrogen'
+  GEMINI_FALLBACK_MODEL: 'gemini-3.8-flash'
   GEMINI_CLI_VERSION: '0.70.0'
   # The action runs gemini with --yolo: every tool Gemini can see runs without
   # confirmation. tools.core is the allowlist that keeps it read-only; no

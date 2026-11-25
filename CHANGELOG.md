@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-11-25] - CI: Gemini review model gemini-4-hydrogen
+
+### Changed
+- Gemini review main model gemini-4-hydrogen, fallback gemini-3.8-flash (both free tier). gemini-3.8-flash returned 503 in 3 of 3 runs on 2026-11-25.
+
 ## [2026-11-25] - CI: Gemini comment-only PR review
 
 ### Added

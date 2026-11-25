@@ -57,12 +57,12 @@ Free tier: "Content used to improve our products" (https://ai.google.dev/gemini-
 
 ## Cost and limits
 
-- Model `gemini-3.8-flash`: input and output "Free of charge" on the free tier (pricing page, checked 2026-11-25). Gemini 4 Carbon, Argon and Neon are not available on the free tier.
+- Model `gemini-4-hydrogen`, fallback `gemini-3.8-flash`: input and output "Free of charge" on the free tier (pricing page, checked 2026-11-25). Gemini 4 Carbon, Argon and Neon are not available on the free tier.
 - Cost is 0 only while the key's project has no billing account. The workflow cannot detect the tier.
-- Free-tier rate limits (RPM, TPM, RPD) are per project and shown only in AI Studio (https://aistudio.google.com/rate-limit); the docs page does not list them per model. Open question: the RPD of `gemini-3.8-flash` for this project.
+- Free-tier rate limits (RPM, TPM, RPD) are per project and shown only in AI Studio (https://aistudio.google.com/rate-limit); the docs page does not list them per model. Open question: the RPD of `gemini-4-hydrogen` and `gemini-3.8-flash` for this project.
 - Requests per review: one per model turn, at most `maxSessionTurns` (20). Assumption, not measured; check `stats` in the Gemini step log of the first run.
 - Diffs above `MAX_DIFF_BYTES` (200000) are skipped. Open question: the value is not derived from a measured token count.
-- HTTP 503 (model overloaded, observed on `gemini-3.8-flash` on 2026-11-25: 10 attempts in 3.7 min, all 503) or HTTP 429 (quota): the review runs once more with `GEMINI_FALLBACK_MODEL` (`gemini-3.6-flash`, also "Free of charge" on the free tier).
+- HTTP 503 (model overloaded) or HTTP 429 (quota): the review runs once more with `GEMINI_FALLBACK_MODEL`. Observed on 2026-11-25 before the switch to `gemini-4-hydrogen`: `gemini-3.8-flash` 503 in 3 of 3 runs, `gemini-3.6-flash` 503 in 1 of 2 runs.
 - Any other failure, or the fallback fails too: the `post` job posts a comment-only review "Gemini review not posted: <reason>" with the run link; PR checks stay green. A failure notice does not start the cooldown. Retry with `/gemini-review`.
 - GitHub Actions minutes: free for standard GitHub-hosted runners in public repositories (https://docs.github.com/en/billing/concepts/product-billing/github-actions).
 
