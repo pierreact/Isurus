@@ -1,0 +1,372 @@
+name: Gemini Review
+
+# Comment-only AI review of pull requests. Security model:
+# - Gemini gets no GitHub token, no MCP server, no shell, write or web tools.
+#   It can only read repository files and returns findings as JSON.
+# - Deterministic steps (below) validate the JSON and post one review with
+#   event COMMENT. Nothing approves, merges, pushes or edits code.
+# - Pull requests from forks never reach the job that holds GEMINI_API_KEY.
+# Setup, permissions and cost: docs/developer/gemini-review.md
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Pull request number to review'
+        required: true
+        type: number
+      additional_context:
+        description: 'Optional focus for the review'
+        required: false
+        type: string
+
+permissions: {}
+
+env:
+  # Free tier model, see docs/developer/gemini-review.md "Cost".
+  GEMINI_MODEL: 'gemini-3.8-flash'
+  GEMINI_CLI_VERSION: '0.70.0'
+  # Automatic reviews after a push are skipped when the previous Gemini review
+  # of the PR is younger than this. Manual requests ignore it.
+  COOLDOWN_MINUTES: '30'
+  MAX_DIFF_BYTES: '200000'
+  MAX_COMMENTS: '15'
+  BOT_MARKER: '<!-- isurus-gemini-review -->'
+
+jobs:
+  gate:
+    if: >-
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.head.repo.full_name == github.repository
+        && github.event.pull_request.draft == false)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && github.event.sender.type == 'User'
+        && startsWith(github.event.comment.body, '/gemini-review')
+        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+      || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      pull-requests: read
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+      pr: ${{ steps.check.outputs.pr }}
+      head_sha: ${{ steps.check.outputs.head_sha }}
+      base_ref: ${{ steps.check.outputs.base_ref }}
+    steps:
+      - name: Check PR origin, state and cooldown
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          skip() {
+            echo "::notice::Gemini review skipped: $1"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          [[ "$PR" =~ ^[0-9]+$ ]] || skip "invalid PR number '$PR'"
+          pr_json="$(gh api "repos/$REPO/pulls/$PR")"
+          head_repo="$(jq -r '.head.repo.full_name // ""' <<<"$pr_json")"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          # Fork PRs are refused for every trigger, also comment and manual ones.
+          [[ "$head_repo" == "$REPO" ]] || skip "PR head is in '$head_repo', not in $REPO (fork)"
+          [[ "$state" == "open" ]] || skip "PR is $state"
+          if [[ "$EVENT" == "pull_request" && "$ACTION" == "synchronize" ]]; then
+            last="$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
+              | jq -rs --arg m "$BOT_MARKER" '[add[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains($m)))] | last | .submitted_at // ""')"
+            if [[ -n "$last" ]]; then
+              age=$(( ($(date -u +%s) - $(date -u -d "$last" +%s)) / 60 ))
+              (( age >= COOLDOWN_MINUTES )) || skip "previous review ${age} min ago, cooldown ${COOLDOWN_MINUTES} min. Comment /gemini-review to force one."
+            fi
+          fi
+          {
+            echo "run=true"
+            echo "pr=$PR"
+            echo "head_sha=$(jq -r '.head.sha' <<<"$pr_json")"
+            echo "base_ref=$(jq -r '.base.ref' <<<"$pr_json")"
+          } >> "$GITHUB_OUTPUT"
+
+  review:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Read-only token. This job holds GEMINI_API_KEY and runs Gemini, so it
+    # must never be able to write to GitHub.
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: gemini-review-pr-${{ needs.gate.outputs.pr }}
+      cancel-in-progress: true
+    outputs:
+      status: ${{ steps.validate.outputs.status }}
+      payload: ${{ steps.validate.outputs.payload }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Refuse unsafe Gemini configuration
+        run: |
+          set -euo pipefail
+          prompt=.gemini/commands/isurus-review.toml
+          # Shell injection trigger or args placeholder: Gemini CLI would run its
+          # shell processor over the injected diff.
+          if grep -nF -e '!{' -e '{{args}}' "$prompt"; then
+            echo "::error file=$prompt::review prompt contains a shell injection trigger"
+            exit 1
+          fi
+          # Only the review prompt may be committed under .gemini/ (no settings,
+          # no workspace extensions, no other commands).
+          extra="$(find .gemini -type f ! -path "$prompt")"
+          if [[ -n "$extra" ]]; then
+            echo "::error::unexpected files under .gemini/: $extra"
+            exit 1
+          fi
+
+      - name: Prepare review input
+        id: prep
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.gate.outputs.pr }}
+          HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+          BASE_REF: ${{ needs.gate.outputs.base_ref }}
+          EVENT: ${{ github.event_name }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          DISPATCH_CONTEXT: ${{ inputs.additional_context }}
+        run: |
+          set -euo pipefail
+          d=.gemini/review
+          mkdir -p "$d"
+          gh api "repos/$REPO/pulls/$PR" \
+            | jq '{number, title, body, base: .base.ref, head: .head.ref, author: .user.login}' > "$d/pr.json"
+          # Diff of exactly the commit the gate checked.
+          gh api -H 'Accept: application/vnd.github.diff' "repos/$REPO/compare/$BASE_REF...$HEAD_SHA" > "$d/raw.diff"
+          size="$(wc -c < "$d/raw.diff")"
+          if (( size == 0 )); then
+            echo "::notice::empty diff, review skipped"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if (( size > MAX_DIFF_BYTES )); then
+            echo "::warning::diff is $size bytes, above MAX_DIFF_BYTES=$MAX_DIFF_BYTES. Review skipped to stay within free-tier limits."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Annotate each diff line with its file line number (R<n> new side,
+          # L<n> old side) and list the lines GitHub accepts inline comments on.
+          awk -v valid="$d/valid.tsv" '
+            /^diff --git / { inhunk = 0; path = ""; old = ""; print ""; next }
+            !inhunk && /^--- / { old = substr($0, 5); sub(/^a\//, "", old); next }
+            !inhunk && /^\+\+\+ / { path = substr($0, 5); sub(/^b\//, "", path); if (path == "/dev/null") path = old; print "FILE " path; next }
+            /^@@ / {
+              inhunk = 1; s = $0; sub(/^@@ -/, "", s)
+              o = s; sub(/[, ].*/, "", o)
+              n = s; sub(/^[^+]*\+/, "", n); sub(/[, ].*/, "", n)
+              ol = o + 0; nl = n + 0; print; next
+            }
+            !inhunk { print "# " $0; next }
+            /^\+/ { printf "R%d +%s\n", nl, substr($0, 2); print path "\tRIGHT\t" nl > valid; nl++; next }
+            /^-/  { printf "L%d -%s\n", ol, substr($0, 2); print path "\tLEFT\t" ol > valid; ol++; next }
+            /^ /  { printf "R%d  %s\n", nl, substr($0, 2); print path "\tRIGHT\t" nl > valid; ol++; nl++; next }
+            { print }
+          ' "$d/raw.diff" > "$d/diff.txt"
+          touch "$d/valid.tsv"
+          jq -Rn '[inputs | {key: ., value: true}] | from_entries' < "$d/valid.tsv" > "$d/valid.json"
+          # Previous inline comments of this workflow, to avoid repeating them.
+          gh api --paginate "repos/$REPO/pulls/$PR/comments" \
+            | jq -s '[add[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains("<!-- isurus-gemini -->"))) | {path, line: (.line // .original_line), side, body: (.body | .[0:600])}]' > "$d/existing.json"
+          ctx=""
+          if [[ "$EVENT" == "issue_comment" ]]; then
+            ctx="${COMMENT_BODY#/gemini-review}"
+          elif [[ "$EVENT" == "workflow_dispatch" ]]; then
+            ctx="$DISPATCH_CONTEXT"
+          fi
+          [[ -n "${ctx//[[:space:]]/}" ]] || ctx="(none)"
+          printf '%s\n' "$ctx" | head -c 2000 > "$d/context.txt"
+          rm -f "$d/raw.diff" "$d/valid.tsv"
+
+      - name: Run Gemini review
+        id: gemini
+        if: steps.prep.outputs.skip != 'true'
+        # Quota exhaustion or API errors must not fail the PR checks.
+        continue-on-error: true
+        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
+        env:
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          gemini_cli_version: ${{ env.GEMINI_CLI_VERSION }}
+          gemini_model: ${{ env.GEMINI_MODEL }}
+          upload_artifacts: 'false'
+          workflow_name: 'gemini-review'
+          prompt: '/isurus-review'
+          # The action runs gemini with --yolo: every tool Gemini can see runs
+          # without confirmation. tools.core is the allowlist that keeps it
+          # read-only; no mcpServers are configured.
+          settings: |-
+            {
+              "model": { "maxSessionTurns": 20 },
+              "tools": {
+                "core": ["read_file", "list_directory", "glob", "grep_search"],
+                "exclude": ["run_shell_command", "write_file", "replace", "web_fetch", "google_web_search"]
+              },
+              "context": { "fileName": "GEMINI.md" },
+              "privacy": { "usageStatisticsEnabled": false },
+              "telemetry": { "enabled": false }
+            }
+
+      - name: Validate findings
+        id: validate
+        if: steps.prep.outputs.skip != 'true'
+        env:
+          OUTCOME: ${{ steps.gemini.outcome }}
+          RESPONSE: ${{ steps.gemini.outputs.summary }}
+          ERRORS: ${{ steps.gemini.outputs.error }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          d=.gemini/review
+          fail() {
+            echo "::warning title=Gemini review not posted::$1"
+            echo "Gemini review not posted: $1" >> "$GITHUB_STEP_SUMMARY"
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          if [[ "$OUTCOME" != "success" ]]; then
+            if grep -qiE 'RESOURCE_EXHAUSTED|429|quota' <<<"$ERRORS"; then
+              fail "Gemini API quota exhausted (free tier). Retry later with /gemini-review."
+            fi
+            fail "Gemini CLI failed. See the 'Run Gemini review' step log."
+          fi
+          printf '%s\n' "$RESPONSE" > "$d/response.txt"
+          if [[ -n "$GEMINI_API_KEY" ]] && grep -qF -- "$GEMINI_API_KEY" "$d/response.txt"; then
+            echo "::error::Gemini output contains the API key. Nothing is posted."
+            exit 1
+          fi
+          sed -n '/^BEGIN_REVIEW_JSON[[:space:]]*$/,/^END_REVIEW_JSON[[:space:]]*$/p' "$d/response.txt" \
+            | sed '1d;$d' | grep -v '^```' > "$d/review.json" || true
+          jq -e 'type == "object" and (.findings | type) == "array"' "$d/review.json" > /dev/null 2>&1 \
+            || fail "Gemini output is not the expected review JSON."
+          jq -c -n \
+            --slurpfile r "$d/review.json" \
+            --slurpfile v "$d/valid.json" \
+            --slurpfile ex "$d/existing.json" \
+            --arg sha "$HEAD_SHA" \
+            --arg model "$GEMINI_MODEL" \
+            --arg marker "$BOT_MARKER" \
+            --argjson max "$MAX_COMMENTS" '
+            # Break @mentions (zero-width space after @) so model output cannot notify users.
+            def zwsp: [8203] | implode;
+            def clean: (. // "") | tostring | gsub("@(?<c>[A-Za-z0-9])"; "@" + zwsp + .c) | .[0:3000];
+            def norm_sev: (.severity // "" | tostring | ascii_downcase) as $s
+              | if ($s | IN("critical", "high", "medium", "low")) then $s else "medium" end;
+            def norm_kind: (.kind // "" | tostring | ascii_downcase) as $k
+              | if ($k | IN("confirmed", "potential")) then $k else "potential" end;
+            def norm_side: if ((.side // "RIGHT") | tostring | ascii_upcase) == "LEFT" then "LEFT" else "RIGHT" end;
+            def rank: {"critical": 0, "high": 1, "medium": 2, "low": 3}[.sev];
+            def cbody:
+              "**[\(.sev | ascii_upcase)] [\(.kind)] \(.title | clean)**\n\n"
+              + "**Problem:** \(.problem | clean)\n\n"
+              + "**Impact:** \(.impact | clean)\n\n"
+              + "**Trigger:** \(.trigger | clean)\n"
+              + (if (.suggestion // "") != "" then "\n**Suggestion:** \(.suggestion | clean)\n" else "" end)
+              + "\n<!-- isurus-gemini -->";
+            $v[0] as $valid | $ex[0] as $prev | $r[0] as $rev
+            | [ $rev.findings[] | select(type == "object")
+                | . + {
+                    sev: norm_sev, kind: norm_kind, side: norm_side,
+                    path: (.path // "" | tostring),
+                    title: (.title // "" | tostring | .[0:120]),
+                    line: ((.line | tonumber?) // null),
+                    start_line: ((.start_line | tonumber?) // null)
+                  }
+                | select(.title != "" and .path != "") ] as $all
+            | [ $all[] | . as $f
+                | select(any($prev[]; .path == $f.path and ((.body // "") | contains($f.title))) | not) ] as $new
+            | ($new | sort_by(rank) | .[0:$max]
+                | map(. as $f
+                    | . + {inline: ($f.line != null
+                        and ($valid["\($f.path)\t\($f.side)\t\($f.line)"] // false)
+                        and ($f.start_line == null
+                          or (($valid["\($f.path)\t\($f.side)\t\($f.start_line)"] // false) and $f.start_line < $f.line)))})) as $kept
+            | ($kept | map(select(.inline))) as $inline
+            | ($kept | map(select(.inline | not))) as $outside
+            | {
+                commit_id: $sha,
+                event: "COMMENT",
+                comments: [ $inline[] | {path, line, side, body: cbody}
+                  + (if .start_line != null then {start_line, start_side: .side} else {} end) ],
+                body: ((
+                  $marker + "\n## Gemini review (automated, comment-only)\n\n"
+                  + "Model `\($model)`, commit `\($sha[0:12])`.\n\n"
+                  + ($rev.summary | clean) + "\n\n"
+                  + (if ($kept | length) == 0 then "No actionable findings.\n"
+                     else "| Severity | Count |\n|---|---|\n"
+                       + ([ "critical", "high", "medium", "low" ] | map(. as $s | "| \($s) | \([ $kept[] | select(.sev == $s) ] | length) |") | join("\n")) + "\n"
+                     end)
+                  + (if ($outside | length) > 0 then
+                       "\n### Findings outside the diff lines\n\n" + ($outside | map("- `\(.path | clean):\(.line // "?")` " + cbody) | join("\n\n")) + "\n"
+                     else "" end)
+                  + (if ($all | length) > ($new | length) then
+                       "\n\(($all | length) - ($new | length)) finding(s) already reported in earlier comments were not repeated.\n"
+                     else "" end)
+                  + (if ($new | length) > $max then "\n\(($new | length) - $max) lower-severity finding(s) omitted (limit \($max)).\n" else "" end)
+                  + "\n_Generated by Gemini. Findings can be wrong. This workflow never approves, merges or edits code._"
+                ) | .[0:60000])
+              }
+          ' > "$d/payload.json" || fail "could not build the review from Gemini output."
+          {
+            echo "status=ok"
+            echo "payload<<PAYLOAD_EOF_${GITHUB_RUN_ID}"
+            cat "$d/payload.json"
+            echo "PAYLOAD_EOF_${GITHUB_RUN_ID}"
+          } >> "$GITHUB_OUTPUT"
+
+  post:
+    needs: [gate, review]
+    if: needs.review.outputs.status == 'ok'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    # The only job with a write token. It runs no checkout and no model.
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post comment-only review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.gate.outputs.pr }}
+          PAYLOAD: ${{ needs.review.outputs.payload }}
+        run: |
+          set -euo pipefail
+          # Rebuild the request from known fields only; event is fixed to COMMENT.
+          printf '%s' "$PAYLOAD" | jq '{
+              commit_id, body, event: "COMMENT",
+              comments: [ (.comments // [])[] | {path, line, side, body}
+                + (if .start_line != null then {start_line, start_side} else {} end) ]
+            }' > review.json
+          if gh api --method POST "repos/$REPO/pulls/$PR/reviews" --input review.json > /dev/null; then
+            exit 0
+          fi
+          echo "::warning::GitHub rejected the inline comments; posting them in the review body instead."
+          jq '{commit_id, event: "COMMENT",
+               body: ((.body + "\n\n### Findings (inline placement rejected by GitHub)\n\n"
+                 + ([ .comments[] | "- `\(.path):\(.line)` " + .body ] | join("\n\n"))) | .[0:60000])}' \
+            review.json > fallback.json
+          gh api --method POST "repos/$REPO/pulls/$PR/reviews" --input fallback.json > /dev/null

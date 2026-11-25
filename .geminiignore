@@ -1,0 +1,21 @@
+# Files Gemini CLI file tools must not read (in addition to .gitignore).
+# Keeps unrelated or bulky content out of requests sent to the Gemini API.
+.claude/
+.git/
+data/
+LICENSES/
+LICENSE
+devbox.lock
+*.png
+*.jpg
+*.pdf
+*.bin
+*.img
+*.iso
+*.log
+logs/
+.env
+.env.*
+*.pem
+*.key
+gha-creds-*.json

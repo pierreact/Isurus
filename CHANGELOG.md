@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026-11-25] - CI: Gemini comment-only PR review
+
+### Added
+- Workflow gemini-review.yml: Gemini reviews same-repository PRs on open, reopen, ready for review and push (30 min cooldown), on a `/gemini-review` comment from a collaborator, or by manual dispatch. Gemini has read-only file tools and no GitHub token; a separate job posts one review with event COMMENT. Fork PRs are skipped.
+- Review prompt .gemini/commands/isurus-review.toml (x86-64, SMP, NUMA, DMA priorities; severity and confirmed/potential per finding), GEMINI.md (imports CLAUDE.md, points to docs), .geminiignore.
+- Docs: developer/gemini-review.md (setup, permissions, security model, cost).
+
 ## [2026-11-22] - Paging: RAM write-back, MMIO uncacheable
 
 ### Fixed
