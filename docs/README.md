@@ -28,6 +28,7 @@
 - [Interrupts](developer/interrupts.md) -- x86-64 interrupt vector table
 - [ACPI Tables](developer/acpi-tables.md) -- ACPI table reference (MADT, SRAT, SLIT, MCFG, DMAR, etc.)
 - [Glossary](developer/glossary.md) -- terminology reference
+- [Gemini PR review](developer/gemini-review.md) -- automated comment-only PR review: setup, permissions, security model, cost
 
 ## Project
 
