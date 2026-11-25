@@ -22,7 +22,8 @@ All addresses below are approximate (~) where they depend on kernel binary size.
 | 0xA0000-0xBFFFF | 640 KB | 128 KB | VGA (text buffer at 0xB8000) | HW |
 | 0xC0000-0xFFFFF | 768 KB | 256 KB | BIOS ROM / ACPI tables | HW |
 | 0x100000 | 1 MB | 4 KB | PML4T | USED |
-| 0x101000+ | 1 MB + 4 KB | 5-20 MB | PDPT/PDT/PT | USED |
+| 0x101000+ | 1 MB + 4 KB | 5-20 MB | PDPT/PDT/PT of the 32-bit boot map (unused after paging_init, never freed) | USED |
+| (bump range) | - | a few pages | Runtime page tables (paging_init), PML4 below 32 MB | USED |
 | PAGING_END+ | ~6-21 MB | 64 KB | BSP stack (allocated at runtime) | USED |
 | (after BSP stack) | ~6-21 MB | 16 KB each | AP stacks (allocated per CPU at runtime) | USED |
 | (after AP stacks) | - | 104 B x 16 | TSS array (per-CPU, in BSS) | USED |
@@ -65,10 +66,22 @@ The page-level type is the PAT entry selected by the leaf entry's PAT, PCD and P
 
 | Range | Bits | Type |
 |-------|------|------|
-| Boot identity map (all RAM up to the highest E820 address) | PWT=0 PCD=0 | WB |
-| MMIO (`map_mmio_range`: LAPIC/IOAPIC/HPET 0xFEC00000-0xFEF00000, legacy VGA 0xA0000-0xBFFFF, PCI ECAM, device BARs) | PWT=1 PCD=1 | UC |
+| RAM (`paging_init`: 0-2 MB, E820 usable, ACPI reclaimable, ACPI NVS, also above 4 GB) | PWT=0 PCD=0 | WB |
+| MMIO (`map_mmio_range`: LAPIC/IOAPIC/HPET 0xFEC00000-0xFEF00000, legacy VGA 0xA0000-0xBFFFF, PCI ECAM, device BARs, ACPI reset register in memory space) | PWT=1 PCD=1 | UC |
+| ACPI tables outside E820 RAM (`paging_map_if_unmapped`, from acpi.c) | PWT=1 PCD=1 | UC |
 
-`map_mmio_range` also sets UC on pages the boot identity map already covers. Boot prints `IA32_PAT` and the type of one RAM, IOAPIC, LAPIC and VGA page (`MEM: page type ...`).
+Boot prints `IA32_PAT` and the type of one RAM, IOAPIC, LAPIC and VGA page, and of the first RAM page at or above 4 GB if there is one (`MEM: page type ...`).
+
+## Page tables
+
+The 32-bit boot code builds an identity map with 4 KB pages (asm32_setup_64bits_paging_structures.inc). It is used only until `paging_init` (src/kernel/paging.c), called after `heap_init`, builds the runtime tables and loads CR3:
+
+- 0-2 MB: 4 KB pages (kernel, AP trampoline, EBDA and BIOS area, VGA; mixed MTRR types).
+- Each E820 usable, ACPI reclaimable and ACPI NVS range: 1 GB pages where the range covers a whole aligned GB and CPUID 0x80000001 EDX bit 26 is set, else 2 MB pages where it covers a whole aligned 2 MB, else 4 KB pages. Usable ranges round inward to 4 KB, ACPI ranges outward.
+- Nothing else is mapped. MMIO is mapped only by `map_mmio_range`, in 4 KB pages; it halts if the address falls in a large page (a device range reported as RAM).
+- All tables come from `alloc_pages`, below 32 MB: APs load CR3 in 32-bit mode (ap_trampoline.asm).
+- All entries have the User bit until per-thread page tables: BSP ring-3 tasks call kernel and driver code directly.
+- Boot log: `PAGING: RAM <bytes> bytes mapped, pages 1G <n> 2M <n> 4K <n>`.
 
 ## Stack
 

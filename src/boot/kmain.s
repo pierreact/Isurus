@@ -541,6 +541,7 @@ EXTERN kprint                                           ; C functions
 EXTERN init_memmgr                                      ;
 EXTERN alloc_bsp_stack                                  ; Allocate BSP stack from high memory
 EXTERN serial_init                                      ; Initialize COM1 serial port
+EXTERN paging_init                                      ; Map E820 RAM with large pages, load CR3
 EXTERN cls                                              ;
 EXTERN update_cursor                                    ;
 EXTERN scroll                                           ;
@@ -588,6 +589,7 @@ include_64bits_functions:                               ; /include
     mov rsp, rax                                        ; Switch to real stack (rax = stack top)
     call serial_init                                    ; Initialize COM1 (output mirrored from here)
     call heap_init                                      ; Initialize heap allocator.
+    call paging_init                                    ; Replace the boot identity map: E820 RAM only, 1G/2M/4K pages
                                                         ;
 ;----------------------------------------------------------------------------------------------------------------------------------------
                                                         ; SMP Bring-Up

@@ -7,7 +7,21 @@
 #include <arch/acpi.h>
 #include <arch/aml.h>
 #include <drivers/monitor.h>
+#include <kernel/paging.h>
 #include "acpi_internal.h"
+
+// Some firmware places ACPI tables in E820 reserved memory, which
+// paging_init does not map. Map a table (header first, for its length)
+// before it is read. Returns 0 for a length that cannot be a table.
+#define ACPI_TABLE_MAX_LEN 0x400000
+static int map_sdt(uint64 addr) {
+    if (!addr) return 0;
+    paging_map_if_unmapped(addr, sizeof(ACPISDTHeader));
+    uint32 len = ((ACPISDTHeader *)addr)->length;
+    if (len < sizeof(ACPISDTHeader) || len > ACPI_TABLE_MAX_LEN) return 0;
+    paging_map_if_unmapped(addr, len);
+    return 1;
+}
 
 // ============================================================================
 // Public globals (extern in arch/acpi.h). MADT fills cpu_*, lapic_*,
@@ -114,6 +128,7 @@ static int validate_rsdp(RSDP *rsdp) {
 
 static void enumerate_root_table_entries(uint64 root_addr, uint8 entry_size) {
     acpi_table_count = 0;
+    if (!map_sdt(root_addr)) return;
     ACPISDTHeader *root = (ACPISDTHeader *)root_addr;
     // Be tolerant here: some firmware has bad root checksum but valid entries.
     if (!root || root->length < sizeof(ACPISDTHeader)) {
@@ -129,8 +144,8 @@ static void enumerate_root_table_entries(uint64 root_addr, uint8 entry_size) {
         else
             table_addr = (uint64)((uint32 *)table_ptrs)[i];
 
+        if (!map_sdt(table_addr)) continue;
         ACPISDTHeader *h = (ACPISDTHeader *)table_addr;
-        if (!h || h->length < sizeof(ACPISDTHeader)) continue;
 
         ACPITableEntry *e = &acpi_tables[acpi_table_count];
         e->signature[0] = h->signature[0];
@@ -293,7 +308,7 @@ void acpi_init(void) {
     if (facp) {
         FADT *fadt = (FADT *)facp;
         uint64 dsdt_addr = fadt->x_dsdt ? fadt->x_dsdt : (uint64)fadt->dsdt;
-        if (dsdt_addr) {
+        if (map_sdt(dsdt_addr)) {
             ACPISDTHeader *dsdt = (ACPISDTHeader *)dsdt_addr;
             if (validate_sdt(dsdt) &&
                 signatures_equal(dsdt->signature, "DSDT")) {
