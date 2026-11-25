@@ -35,8 +35,11 @@ env:
   # The action runs gemini with --yolo: every tool Gemini can see runs without
   # confirmation. tools.core is the allowlist that keeps it read-only; no
   # mcpServers are configured.
+  # general.maxAttempts (default 10, max 10): with 10, a 503 on the main model
+  # used 7 min of retries before the fallback started (2026-11-25).
   GEMINI_SETTINGS: |-
     {
+      "general": { "maxAttempts": 4 },
       "model": { "maxSessionTurns": 20 },
       "tools": {
         "core": ["read_file", "list_directory", "glob", "grep_search"],
@@ -116,7 +119,8 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Measured 2026-11-25: main model 7.3 min (all 503), fallback 5.8 min.
+    timeout-minutes: 25
     # Read-only token. This job holds GEMINI_API_KEY and runs Gemini, so it
     # must never be able to write to GitHub.
     permissions:

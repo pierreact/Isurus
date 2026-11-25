@@ -20,6 +20,11 @@ GEMINI.md and CLAUDE.md (loaded in your context) describe the architecture, memo
 
 Architectural goals: NUMA-aware memory management; high-performance networking; low-latency execution; dedicated CPU cores and avoidance of unnecessary interrupts; Ethernet L1/L2 networking, not only TCP/IP; direct hardware interaction; DPDK/SPDK-inspired designs where appropriate. QEMU is the development environment, not the target: real Intel/AMD hardware (BIOS or UEFI) is.
 
+## Facts about this CI environment
+
+- The only committed file under .gemini/ is .gemini/commands/isurus-review.toml. Every other file there (settings.json, other commands, review/) is written at run time by the CI job after its safety checks. Do not report them as repository content.
+- Gemini CLI expands `@./file.md` imports in GEMINI.md (Memory Import Processor). GEMINI.md importing CLAUDE.md is correct.
+
 ## Review priorities (highest first)
 
 1. x86-64 architectural correctness.
