@@ -1,6 +1,6 @@
 # Isurus OS
 
-x86-64 kernel (Zero-Interrupt NUMA Cluster), NASM + C, AGPLv3 / commercial.
+x86-64 kernel (Zero-Interrupt NUMA Cluster), NASM + C, Apache 2.0 + HFT condition (source-available, see LICENSE).
 
 ## Doctrine: real-hardware check
 QEMU is the dev environment, not the target. Every plan and implementation answers:

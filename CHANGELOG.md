@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026-11-26] - License: Apache 2.0 with HFT condition; README revision
+
+### Changed
+- License: Apache License 2.0 with a permanent condition: production use by or on behalf of a high-frequency trading business requires a commercial license. Replaces the dual AGPLv3 / commercial notice. LICENSE records the earlier GPLv2 and AGPLv3 periods.
+- LICENSES/: Apache-2.0.txt added, AGPL-3.0.txt removed.
+- README: status block, target design marked as target, address space and locality wording, roadmap, research questions, development method, history, license section.
+
 ## [2026-11-26] - Memory: NUMA-local boot allocation
 
 ### Added
