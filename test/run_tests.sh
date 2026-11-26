@@ -264,6 +264,23 @@ check "NIC mode displayed" "mode:"
 send_cmd "sys.thread.ls"
 check "Thread metadata displayed" "CPU"
 
+# Test: NUMA-local memory (alloc_pages_node). Columns CPU, NUMA, MEM: the
+# AP stacks and data region are on the core's node; NIC DMA memory is on
+# the NIC's node (slots 0-2 on node 0, slots 3-4 on node 1).
+check "Node pools built" "MEM: node 1 pool"
+check "CPU 1 memory on node 0" "^  1    0    0  "
+check "CPU 2 memory on node 1" "^  2    1    1  "
+check "CPU 3 memory on node 1" "^  3    1    1  "
+DMA_N0=$(grep -ac "VIRTIO-NET: DMA memory node 0," "$SERIAL_LOG" || true)
+DMA_N1=$(grep -ac "VIRTIO-NET: DMA memory node 1," "$SERIAL_LOG" || true)
+if [ "$DMA_N0" = "3" ] && [ "$DMA_N1" = "2" ]; then
+    echo "  PASS: NIC DMA memory on the NIC's node (node 0: 3, node 1: 2)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: NIC DMA memory on the NIC's node (node 0: $DMA_N0 of 3, node 1: $DMA_N1 of 2)"
+    FAIL=$((FAIL + 1))
+fi
+
 # Test: sys.disk.ls (AHCI devices)
 send_cmd "sys.disk.ls"
 check "AHCI devices listed" "sata"
@@ -337,16 +354,20 @@ fi
 paging_end_last() {
     grep -a "Paging structures end" "$SERIAL_LOG" | tail -1 | awk '{print $1}'
 }
+# Node pools: the last "Node pool" line of each node (2 nodes).
+node_pools_last() {
+    grep -a "^Node pool" "$SERIAL_LOG" | tail -2 | tr -d '\r' | tr '\n' ' '
+}
 send_cmd "sys.mem.info"
-PE_BEFORE=$(paging_end_last)
+PE_BEFORE="$(paging_end_last) $(node_pools_last)"
 for _ in 1 2 3; do
     send_cmd "sys.proc.run /CONF/DEMO_APP.INI" 3
 done
 send_cmd "sys.fs.ls /bin"
 send_cmd "sys.mem.info"
-PE_AFTER=$(paging_end_last)
-echo "  [alloc_pages bump pointer: $PE_BEFORE -> $PE_AFTER]"
-if [ -n "$PE_BEFORE" ] && [ "$PE_BEFORE" = "$PE_AFTER" ]; then
+PE_AFTER="$(paging_end_last) $(node_pools_last)"
+echo "  [alloc_pages bump pointer and node pools: $PE_BEFORE -> $PE_AFTER]"
+if grep -aq "^Node pool 1: used" "$SERIAL_LOG" && [ "$PE_BEFORE" = "$PE_AFTER" ]; then
     echo "  PASS: No alloc_pages leak across 3 launches"
     PASS=$((PASS + 1))
 else
@@ -444,6 +465,11 @@ sleep 12
 
 check "1 GB pages used" "PAGING: RAM .* 1G [1-9].*(1G pages supported)"
 check "RAM above 4 GB write-back" "MEM: page type RAM above 4 GB: WB"
+
+# 6 GB: Q35 puts RAM above 2 GB at 4 GB and up, so node 1 (the last 3 GB)
+# is all above 4 GB. The data region of a node-1 core must be there.
+send_cmd "sys.thread.ls"
+check "Node-1 core memory above 4 GB" "^  2    1    1  0000000[1-9]"
 
 # Debug: capture what's actually on tap0 during ARP test.
 # arping and tcpdump need raw sockets (sudo) so they must be

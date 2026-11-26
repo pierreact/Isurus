@@ -47,6 +47,7 @@ EXTERN heap_init                                        ; Heap initialization.
 EXTERN ide_init                                         ; IDE initialization.
 EXTERN fat32_init                                       ; FAT32 initialization.
 EXTERN acpi_init                                        ; ACPI RSDP/MADT parsing.
+EXTERN mem_numa_init                                    ; Per-NUMA-node page pools.
 EXTERN map_mmio_region                                  ; Map APIC MMIO pages.
 EXTERN disable_pic                                      ; Disable 8259A PIC.
 EXTERN lapic_init                                       ; Initialize Local APIC on BSP.
@@ -594,6 +595,7 @@ include_64bits_functions:                               ; /include
 ;----------------------------------------------------------------------------------------------------------------------------------------
                                                         ; SMP Bring-Up
     call acpi_init                                      ; Parse ACPI tables (RSDP/MADT)
+    call mem_numa_init                                  ; Per-node page pools (E820 x SRAT)
     call map_mmio_region                                ; Map LAPIC/IOAPIC MMIO pages
     call disable_pic                                    ; Mask all PIC IRQs
     call lapic_init                                     ; Enable Local APIC on BSP

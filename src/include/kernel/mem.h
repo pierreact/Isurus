@@ -13,6 +13,17 @@ void heap_stats(uint32 *used_blocks, uint32 *free_blocks, uint32 *total_blocks);
 uint64 alloc_pages(uint32 n);   // boot-time only, never freed; halts when out of range (never returns 0)
 uint64 alloc_bsp_stack(void);
 
+// Per-node pools (above the app slots). Same contract as alloc_pages.
+// node 0xFFFFFFFF (unknown) = BSP's node; a node without memory uses the
+// nearest node by SLIT distance.
+void mem_numa_init(void);                       // after acpi_init
+uint64 alloc_pages_node(uint32 node, uint32 n);
+uint32 mem_bsp_node(void);
+uint32 mem_cpu_node(uint8 lapic_id);            // SRAT node, BSP's node if absent
+int mem_addr_node(uint64 addr, uint32 *node_out); // SRAT node of a physical address
+uint32 mem_pool_count(void);
+void mem_pool_info(uint32 i, uint32 *node, uint64 *bytes, uint64 *used);
+
 void inc_256(uint8* slot, uint8* write);
 
 #define E820_TYPE_FREE              1

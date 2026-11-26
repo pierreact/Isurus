@@ -2,6 +2,7 @@
 
 #include "shell_internal.h"
 #include <arch/acpi.h>
+#include <kernel/mem.h>
 #include <syscall.h>
 
 extern uint8  data_counter_mmap_entries;
@@ -23,6 +24,20 @@ void cmd_meminfo(void) {
         sh_print_hex((long)&MEMMAP_START, " MEMMAP start address\n");
         sh_print_hex(PML4T_LOCATION, " PML4T location\n");
         sh_print_hex(PAGING_LOCATION_END, " Paging structures end\n");
+    }
+    // Per-node page pools (alloc_pages_node). Bytes used must not change
+    // after boot.
+    for (uint32 i = 0; i < mem_pool_count(); i++) {
+        uint32 node;
+        uint64 bytes, used;
+        mem_pool_info(i, &node, &bytes, &used);
+        sh_print("Node pool ");
+        sh_print_dec(node);
+        sh_print(": used ");
+        sh_print_dec(used);
+        sh_print(" of ");
+        sh_print_dec(bytes);
+        sh_print(" bytes\n");
     }
 }
 

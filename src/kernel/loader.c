@@ -20,8 +20,13 @@ uint64 ap_entry_addrs[MAX_CPUS];
 static uint64 ap_data_regions[MAX_CPUS];
 
 void ap_user_alloc(uint32 cpu_idx) {
-    ap_user_stacks[cpu_idx] = alloc_pages(USER_STACK_SIZE / 4096);
-    ap_data_regions[cpu_idx] = alloc_pages(AP_DATA_SIZE / 4096);
+    uint32 node = mem_cpu_node(percpu[cpu_idx].lapic_id);
+    ap_user_stacks[cpu_idx] = alloc_pages_node(node, USER_STACK_SIZE / 4096);
+    ap_data_regions[cpu_idx] = alloc_pages_node(node, AP_DATA_SIZE / 4096);
+}
+
+uint64 ap_data_region(uint32 cpu_idx) {
+    return cpu_idx < MAX_CPUS ? ap_data_regions[cpu_idx] : 0;
 }
 
 void ap_user_prepare(uint32 cpu_idx) {

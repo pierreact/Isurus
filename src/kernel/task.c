@@ -64,11 +64,11 @@ int task_create(const char *name, void (*entry)(void)) {
     t->name[15] = '\0';
 
     // Allocate user stack (ring 3)
-    t->stack_base = alloc_pages(TASK_STACK_PAGES);
+    t->stack_base = alloc_pages_node(mem_bsp_node(), TASK_STACK_PAGES);
     t->user_rsp = t->stack_base + TASK_STACK_PAGES * 4096;
 
     // Allocate kernel stack (ring 0)
-    t->kstack_base = alloc_pages(TASK_STACK_PAGES);
+    t->kstack_base = alloc_pages_node(mem_bsp_node(), TASK_STACK_PAGES);
     t->kstack_top = t->kstack_base + TASK_STACK_PAGES * 4096;
 
     t->entry = (uint64)entry;

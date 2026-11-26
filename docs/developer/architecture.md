@@ -46,6 +46,18 @@ Trade-off: wastes memory on small allocations. Acceptable for a kernel where mos
 - Boot-time only, never freed. Every size is fixed at build time or by the hardware found at boot (CPU count, NICs, AHCI ports). Nothing allocates per operation: per-operation buffers are static or allocated at boot and reused (examples: AHCI DMA bounce buffer, iso9660 sector buffer, per-AP user stacks in `cpu_init`).
 - **Never returns 0.** A request that does not fit below the limit prints `MEM: alloc_pages(n pages) failed` and halts. Callers do not check and have no failure path: a machine either boots with all its memory or does not boot. There is no partial state (AP offline, NIC skipped) to handle later.
 - `map_mmio_range` allocates page-table pages through it, with the same behavior.
+- Users: page tables (must stay below 32 MB: APs load CR3 in 32-bit mode), the BSP stack, AHCI.
+
+### Per-node page pools (alloc_pages_node)
+
+`alloc_pages_node(node, n)` (`src/kernel/mem.c`) has the same contract as `alloc_pages` (boot-time only, never freed, never returns 0, halts when the pool is full) and returns memory on NUMA node `node` (SRAT proximity domain).
+
+- Pools: built by `mem_numa_init`, called right after `acpi_init`. Each node's pool is the E820 usable RAM inside that node's SRAT memory ranges, above the app slots (`APP_LOAD_BASE + MAX_APPS * APP_REGION_SIZE`, 96 MB). Up to 8 ranges per node, first fit across them. SRAT ranges flagged hot-pluggable or non-volatile are not used (logged). Overlapping ranges halt the boot.
+- No SRAT: one pool, node 0, with all usable RAM above 96 MB.
+- Node not in SRAT (`PCI_NUMA_UNKNOWN`, a CPU absent from SRAT): the BSP's node (SRAT node of the CPUID initial APIC ID).
+- Node without a pool (memory-less node): the pool at the smallest SLIT distance, or the BSP's pool without SLIT. Logged once: `MEM: node <n> has no memory pool, using node <m>`.
+- Users: AP kernel stacks, AP user stacks and data regions (the core's node); virtio rings and RX/TX buffers (the NIC's node, from PCI `numa_node`); BSP task stacks and BSP L2 packet pools (the BSP's node).
+- Boot log: `MEM: node <n> pool <MB> MB in <k> range(s)`, `VIRTIO-NET: DMA memory node <n>`. `sys.thread.ls` column MEM: SRAT node of each AP's stacks and data region. `sys.mem.info`: bytes used per pool.
 
 ## Execution model
 
