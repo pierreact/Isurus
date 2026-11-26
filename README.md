@@ -6,6 +6,8 @@
 
 A bare-metal research kernel for x86-64. Its direction is to run a cluster of machines as one NUMA computer: remote machines become NUMA nodes with higher latency, one process spans cores on several machines, and its threads exchange data through explicitly shared memory regions while their working memory stays local.
 
+An asymmetric kernel: one control core runs the kernel and services, the other cores run pinned dataplane threads with direct device access; the cluster target extends this to a NUMA-aware single system image.
+
 > **Status (single node only).** Today the kernel boots from a BIOS ISO and is tested in QEMU Q35. CPU 0 runs the kernel, all interrupts and a cooperative ring-3 shell; every other core runs one pinned ring-3 thread. ACPI NUMA topology discovery, PCIe enumeration and a virtio-net driver work.
 >
 > **Not yet implemented:** multi-node clustering, cross-node shared memory (DSM), DPDK-style NIC access (application threads reach the NIC through a syscall passthrough today), SPDK-style storage access. No latency or jitter comparison with Linux exists yet.
