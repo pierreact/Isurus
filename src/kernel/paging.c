@@ -22,7 +22,7 @@ extern uint32 PML4T_LOCATION;
 
 static volatile uint64 *pml4;
 static int use_1g;
-static uint64 count_1g, count_2m, count_4k;
+static uint64 count_1g, count_2m, count_4k, count_tables;
 static uint64 high_ram;                        // first RAM address >= 4 GB, 0 if none
 
 static void halt(char *msg, uint64 addr) {
@@ -35,6 +35,7 @@ static void halt(char *msg, uint64 addr) {
 static uint64 new_table(void) {
     uint64 t = alloc_pages(1);                 // below 32 MB: APs load CR3 in 32-bit mode
     memset((void *)t, 0, SIZE_4K);
+    count_tables++;
     return t;
 }
 
@@ -134,6 +135,8 @@ void paging_init(void) {
     kprint_dec((uint32)count_2m);
     kprint(" 4K ");
     kprint_dec((uint32)count_4k);
+    kprint(", tables ");
+    kprint_dec((uint32)count_tables);
     kprint(use_1g ? " (1G pages supported)\n" : " (1G pages not supported)\n");
     kprint_long2hex((uint64)pml4, " PAGING: PML4\n");
 }

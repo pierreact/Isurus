@@ -23,9 +23,9 @@ All addresses below are approximate (~) where they depend on kernel binary size.
 | 0xC0000-0xFFFFF | 768 KB | 256 KB | BIOS ROM / ACPI tables | HW |
 | 0x100000 | 1 MB | 4 KB | PML4T | USED |
 | 0x101000+ | 1 MB + 4 KB | 5-20 MB | PDPT/PDT/PT of the 32-bit boot map (unused after paging_init, never freed) | USED |
-| (bump range) | - | a few pages | Runtime page tables (paging_init), PML4 below 32 MB | USED |
 | PAGING_END+ | ~6-21 MB | 64 KB | BSP stack (allocated at runtime) | USED |
-| (after BSP stack) | - | - | AHCI command lists, tables, bounce buffer; MMIO page tables | USED |
+| (after BSP stack) | - | 4 KB per table: 1 PML4, 1 PDPT per 512 GB with RAM, 1 PD per GB not in a 1 GB page, 1 PT per 2 MB not in a 2 MB page (6 tables measured with -m 2G and -m 6G) | Runtime page tables (paging_init). map_mmio_range adds tables later from the same allocator, so they are not contiguous | USED |
+| (after page tables) | - | - | AHCI command lists, tables, bounce buffer; MMIO page tables | USED |
 | 0x2000000-0x6000000 | 32 MB | 64 MB | App image slots (4 x 16 MB) | USED |
 | 0x6000000+ | 96 MB | per node | Per-node page pools (alloc_pages_node): AP stacks, AP data regions, NIC rings and buffers, BSP task stacks, BSP L2 pools | USED |
 | 0xFEC00000-0xFEF00000 | 4076 MB | 3 MB | APIC MMIO (IOAPIC + LAPIC, mapped at runtime) | HW |
@@ -80,7 +80,7 @@ The 32-bit boot code builds an identity map with 4 KB pages (asm32_setup_64bits_
 - Nothing else is mapped. MMIO is mapped only by `map_mmio_range`, in 4 KB pages; it halts if the address falls in a large page (a device range reported as RAM).
 - All tables come from `alloc_pages`, below 32 MB: APs load CR3 in 32-bit mode (ap_trampoline.asm).
 - All entries have the User bit until per-thread page tables: BSP ring-3 tasks call kernel and driver code directly.
-- Boot log: `PAGING: RAM <bytes> bytes mapped, pages 1G <n> 2M <n> 4K <n>`.
+- Boot log: `PAGING: RAM <bytes> bytes mapped, pages 1G <n> 2M <n> 4K <n>, tables <n>`.
 
 ## Stack
 

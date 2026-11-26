@@ -1,5 +1,13 @@
 # Changelog
 
+## [2026-11-26] - Paging: table count in the boot log
+
+### Added
+- The `PAGING: RAM` boot line prints the number of tables paging_init allocates. Measured in QEMU: 6 tables with -m 2G (no 1 GB pages) and with -m 6G (1 GB pages). Test for the -m 2G count.
+
+### Fixed
+- memory-map.md: the runtime page tables row was placed before the BSP stack and gave its size as "a few pages". It now follows the BSP stack and gives the formula, the measured count, and the extra tables from map_mmio_range.
+
 ## [2026-11-26] - License: Apache 2.0 with HFT condition; README revision
 
 ### Changed
