@@ -1,5 +1,20 @@
 # Changelog
 
+## [2026-11-26] - Memory: NUMA-local boot allocation
+
+### Added
+- alloc_pages_node(node, n): per-node bump pools built after acpi_init from E820 usable RAM intersected with SRAT memory ranges, above the app slots (96 MB). Same contract as alloc_pages: boot-time only, never freed, halts when full.
+- SRAT ranges flagged hot-pluggable or non-volatile are not used; overlapping ranges halt the boot.
+- Node unknown to SRAT uses the BSP's node; a node without memory uses the nearest node by SLIT distance (logged).
+- sys.thread.ls column MEM (SRAT node of each AP's stacks and data region) and DATA (data region address); sys.mem.info prints bytes used per node pool.
+- Tests: node-1 cores and NICs get node-1 memory on the 2-node QEMU; above 4 GB in the 6 GB run; node pools unchanged across app launches.
+
+### Changed
+- AP kernel stacks, AP user stacks and data regions: allocated on the core's node (were all below 32 MB, node 0).
+- virtio rings and RX/TX buffers: allocated on the NIC's node.
+- BSP task stacks and BSP L2 packet pools: allocated on the BSP's node, above 96 MB.
+- alloc_pages keeps page tables, the BSP stack and AHCI below 32 MB.
+
 ## [2026-11-25] - CI: Gemini review model gemini-4-hydrogen
 
 ### Changed

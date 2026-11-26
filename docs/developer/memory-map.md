@@ -25,11 +25,9 @@ All addresses below are approximate (~) where they depend on kernel binary size.
 | 0x101000+ | 1 MB + 4 KB | 5-20 MB | PDPT/PDT/PT of the 32-bit boot map (unused after paging_init, never freed) | USED |
 | (bump range) | - | a few pages | Runtime page tables (paging_init), PML4 below 32 MB | USED |
 | PAGING_END+ | ~6-21 MB | 64 KB | BSP stack (allocated at runtime) | USED |
-| (after BSP stack) | ~6-21 MB | 16 KB each | AP stacks (allocated per CPU at runtime) | USED |
-| (after AP stacks) | - | 104 B x 16 | TSS array (per-CPU, in BSS) | USED |
-| (after TSS) | - | 64 KB each | BSP task kernel stacks (allocated per task) | USED |
-| (after kstacks) | - | 64 KB each | BSP task user stacks (allocated per task) | USED |
-| (after stacks) | - | - | - | FREE |
+| (after BSP stack) | - | - | AHCI command lists, tables, bounce buffer; MMIO page tables | USED |
+| 0x2000000-0x6000000 | 32 MB | 64 MB | App image slots (4 x 16 MB) | USED |
+| 0x6000000+ | 96 MB | per node | Per-node page pools (alloc_pages_node): AP stacks, AP data regions, NIC rings and buffers, BSP task stacks, BSP L2 pools | USED |
 | 0xFEC00000-0xFEF00000 | 4076 MB | 3 MB | APIC MMIO (IOAPIC + LAPIC, mapped at runtime) | HW |
 
 ### Runtime-only areas (used temporarily during AP startup)
@@ -58,7 +56,8 @@ IOAPIC_BASE     = 0xFEC00000
 Low memory: kernelEnd to 0x9F000 (~580 KB) - used as heap
 High memory: PAGING_LOCATION_END to the alloc_pages limit (end of the usable E820 entry, capped at APP_LOAD_BASE 0x2000000) - bump allocator, never freed, see architecture.md "Page allocator"
 App images: 0x2000000+ (16 MB per app slot; the part after the file, the image .bss, is zeroed per launch)
-AP data regions: 128 KB per AP in high memory (alloc_pages at boot, zeroed per launch, ThreadMeta.data_base; interim until per-thread page tables)
+Per-node pools: usable RAM of each NUMA node above 0x6000000 (alloc_pages_node, never freed, see architecture.md "Per-node page pools")
+AP data regions: 128 KB per AP on the core's node (alloc_pages_node at boot, zeroed per launch, ThreadMeta.data_base; interim until per-thread page tables)
 
 ## Memory types
 
@@ -92,10 +91,10 @@ The 32-bit boot code builds an identity map with 4 KB pages (asm32_setup_64bits_
 | 32-bit (protected mode, transient) | ESP=0x80000 (flat SS) | Set explicitly in `kernel32:` (kmain.s). Transient: pushes during PIC/IDT/paging setup land in free conventional RAM between kernel end and VGA; the region is later reused by the heap. The small GDT flat-data descriptor at `gdt+0x10` has granularity byte `0xCF` (G=1, B=1) so stack ops use the full 32-bit ESP. |
 | 64-bit (BSP early) | temp_stack_end (0x16000, in .bss) | Until `alloc_bsp_stack` runs |
 | 64-bit (BSP) | PAGING_LOCATION_END+ | 64 KB, allocated from high memory |
-| 64-bit (APs) | percpu[i].stack_top | 16 KB per AP, allocated from high memory |
-| 64-bit (BSP ring 3) | task.user_rsp | 64 KB per task, allocated from high memory |
+| 64-bit (APs) | percpu[i].stack_top | 16 KB per AP, on the core's node (alloc_pages_node) |
+| 64-bit (BSP ring 3) | task.user_rsp | 64 KB per task, on the BSP's node (alloc_pages_node) |
 | 64-bit (BSP ring 0, syscall) | task.kstack_top | 64 KB per task kernel stack |
-| 64-bit (AP ring 3) | ap_user_stacks[i] + 64 KB | 64 KB per AP, allocated at boot in cpu_init, reused by every launch |
+| 64-bit (AP ring 3) | ap_user_stacks[i] + 64 KB | 64 KB per AP, on the core's node, allocated at boot in cpu_init, reused by every launch |
 
 **Why the 32-bit stack is pinned to 0x80000:** on the 16 -> 32 bit
 transition the CPU keeps ESP's low 16 bits from real-mode SP

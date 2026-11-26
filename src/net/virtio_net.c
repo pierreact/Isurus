@@ -87,8 +87,9 @@ int virtio_net_init(VirtioNetDevice *dev, const PCIDevice *pci) {
     // Allocate RX and TX buffer pools
     uint32 rx_pages = (VIRTIO_NET_RX_BUFFERS * VIRTIO_NET_BUF_SIZE + 4095) / 4096;
     uint32 tx_pages = (VIRTIO_NET_TX_BUFFERS * VIRTIO_NET_BUF_SIZE + 4095) / 4096;
-    dev->rx_buffers = (uint8 *)alloc_pages(rx_pages);
-    dev->tx_buffers = (uint8 *)alloc_pages(tx_pages);
+    uint32 node = pci->numa_node;           // unknown node: BSP's node
+    dev->rx_buffers = (uint8 *)alloc_pages_node(node, rx_pages);
+    dev->tx_buffers = (uint8 *)alloc_pages_node(node, tx_pages);
 
     memset(dev->rx_buffers, 0, rx_pages * 4096);
     memset(dev->tx_buffers, 0, tx_pages * 4096);
@@ -108,6 +109,14 @@ int virtio_net_init(VirtioNetDevice *dev, const PCIDevice *pci) {
         if (i < 5) putc(':');
     }
     kprint(dev->link_up ? " link up\n" : " link down\n");
+
+    // Node of the memory actually used (SRAT lookup of the address)
+    uint32 mem_node;
+    kprint("VIRTIO-NET: DMA memory node ");
+    if (mem_addr_node((uint64)dev->rx_buffers, &mem_node)) kprint_dec(mem_node);
+    else kprint("-");
+    kprint(", rx buffers at ");
+    kprint_long2hex((uint64)dev->rx_buffers, "\n");
 
     // Pre-fill RX queue with buffers
     prefill_rx(dev);

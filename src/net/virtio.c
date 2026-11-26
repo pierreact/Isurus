@@ -197,17 +197,20 @@ int virtio_pci_setup_queue(VirtioPCIDevice *vdev, uint16 queue_idx) {
     if (size > VIRTQ_MAX_SIZE)
         size = VIRTQ_MAX_SIZE;
 
+    // Rings on the device's NUMA node (unknown node: BSP's node)
+    uint32 node = vdev->pci->numa_node;
+
     // Allocate descriptor table: size * 16 bytes
     uint32 desc_pages = (size * sizeof(VirtqDesc) + 4095) / 4096;
-    uint64 desc_phys = alloc_pages(desc_pages);
+    uint64 desc_phys = alloc_pages_node(node, desc_pages);
 
     // Allocate available ring: 4 + 2*size bytes
     uint32 avail_pages = (4 + 2 * size + 4095) / 4096;
-    uint64 avail_phys = alloc_pages(avail_pages);
+    uint64 avail_phys = alloc_pages_node(node, avail_pages);
 
     // Allocate used ring: 4 + 8*size bytes
     uint32 used_pages = (4 + 8 * size + 4095) / 4096;
-    uint64 used_phys = alloc_pages(used_pages);
+    uint64 used_phys = alloc_pages_node(node, used_pages);
 
     // Zero all memory
     memset((void *)desc_phys, 0, desc_pages * 4096);

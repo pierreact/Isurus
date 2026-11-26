@@ -5,6 +5,8 @@
 #include <arch/ports.h>
 #include <drivers/pci.h>
 #include <kernel/cpu.h>
+#include <kernel/loader.h>
+#include <kernel/mem.h>
 #include <arch/acpi.h>
 #include <net/nic.h>
 #include <net/l2.h>
@@ -69,7 +71,9 @@ void cmd_thread_ls(void) {
     sh_print("mode: ");
     print_mode(nic_get_mode());
     sh_putc('\n');
-    sh_print("CPU  NUMA  NIC          PCI         MAC\n");
+    // MEM: SRAT node of the AP's kernel stack, user stack and data region
+    // (mix if they differ). DATA: physical address of the data region.
+    sh_print("CPU  NUMA  MEM  DATA               NIC          PCI         MAC\n");
     for (uint32 i = 0; i < cpu_count; i++) {
         ThreadMeta *tm = thread_meta_get(i);
         sh_print_dec_pad(i, 3);
@@ -80,6 +84,21 @@ void cmd_thread_ls(void) {
             sh_print_dec_pad(tm->numa_node, 3);
         }
         sh_print("  ");
+        uint64 data = ap_data_region(i);
+        uint32 n_data, n_ks, n_us;
+        if (i == 0 || !mem_addr_node(data, &n_data)
+            || !mem_addr_node(percpu[i].stack_top - 1, &n_ks)
+            || !mem_addr_node(ap_user_stacks[i], &n_us)) {
+            sh_print("  -");
+        } else if (n_data != n_ks || n_data != n_us) {
+            sh_print("mix");
+        } else {
+            sh_print_dec_pad(n_data, 3);
+        }
+        sh_print("  ");
+        if (i == 0) sh_print("-                 ");   // width of "<16 hex>h "
+        else sh_print_hex((long)data, "");
+        sh_print(" ");
         if (tm->nic_index == NIC_NONE) {
             sh_print("(none)       ");
             sh_print("           ");

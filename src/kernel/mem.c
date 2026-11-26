@@ -3,6 +3,7 @@
 #include <kernel/mem.h>
 #include <kernel/app.h>
 #include <kernel/paging.h>
+#include <arch/acpi.h>
 
 extern uint8 data_counter_mmap_entries;
 extern uint32 MEMMAP_START;
@@ -93,6 +94,246 @@ uint64 alloc_pages(uint32 n) {
     }
     PAGING_LOCATION_END = (uint32)(addr + size);
     return addr;
+}
+
+// Per-node page pools (alloc_pages_node). One pool per NUMA node that has
+// usable RAM: E820 usable ranges intersected with the node's SRAT memory
+// ranges, above NODE_POOL_FLOOR. Same contract as alloc_pages: boot-time
+// only, never freed, never returns 0.
+#define NODE_POOL_FLOOR   (APP_LOAD_BASE + (uint64)MAX_APPS * APP_REGION_SIZE)  // above the app slots
+#define MAX_POOL_RANGES   8                 // per node
+#define SRAT_HOT_PLUG     0x2               // SRAT memory affinity flag bits (ACPI 6.5, 5.2.16.2)
+#define SRAT_NON_VOLATILE 0x4
+
+typedef struct {
+    uint64 next;                            // first free byte
+    uint64 end;                             // exclusive
+} PoolRange;
+
+typedef struct {
+    uint32 node;                            // proximity domain
+    uint32 nranges;
+    uint64 bytes;                           // total size of the ranges
+    PoolRange r[MAX_POOL_RANGES];
+} NodePool;
+
+static NodePool pools[MAX_NUMA_NODES];
+static uint32 pool_count;
+static uint32 bsp_node;
+
+// Node -> pool for nodes without memory of their own (nearest pool).
+static uint32 fallback_node[MAX_NUMA_NODES];
+static uint32 fallback_pool[MAX_NUMA_NODES];
+static uint32 fallback_count;
+
+static void mem_halt(void) {
+    kprint("MEM: halting\n");
+    for (;;) __asm__ volatile("cli; hlt");
+}
+
+static NodePool *pool_of(uint32 node) {
+    for (uint32 i = 0; i < pool_count; i++)
+        if (pools[i].node == node) return &pools[i];
+    return NULL;
+}
+
+// Two ranges from overlapping E820 or SRAT entries would hand out the
+// same pages twice.
+static void check_overlap(uint64 base, uint64 end) {
+    for (uint32 i = 0; i < pool_count; i++) {
+        for (uint32 j = 0; j < pools[i].nranges; j++) {
+            if (base < pools[i].r[j].end && pools[i].r[j].next < end) {
+                kprint_long2hex(base, " MEM: node pool range overlaps an existing range at ");
+                kprint_long2hex(pools[i].r[j].next, "\n");
+                mem_halt();
+            }
+        }
+    }
+}
+
+static void pool_add(uint32 node, uint64 base, uint64 end) {
+    base = (base + 4095) & ~4095ULL;
+    end &= ~4095ULL;
+    if (base < NODE_POOL_FLOOR) base = NODE_POOL_FLOOR;
+    if (end <= base) return;
+    check_overlap(base, end);
+
+    NodePool *p = pool_of(node);
+    if (!p) {
+        if (pool_count >= MAX_NUMA_NODES) {
+            kprint("MEM: more than 16 memory nodes, node ");
+            kprint_dec(node);
+            kprint(" not used\n");
+            return;
+        }
+        p = &pools[pool_count++];
+        p->node = node;
+        p->nranges = 0;
+        p->bytes = 0;
+    }
+    if (p->nranges >= MAX_POOL_RANGES) {
+        kprint_long2hex(base, " MEM: node pool range limit reached, range not used\n");
+        return;
+    }
+    p->r[p->nranges].next = base;
+    p->r[p->nranges].end = end;
+    p->nranges++;
+    p->bytes += end - base;
+}
+
+// Called after acpi_init (SRAT parsed), before the first alloc_pages_node.
+void mem_numa_init(void) {
+    E820E *map = (E820E *)&MEMMAP_START;
+    uint32 naff = 0;
+    const ACPINumaMemAffinity *aff = acpi_memory_affinities(&naff);
+
+    // BSP node: initial APIC ID (CPUID.1:EBX[31:24]) looked up in SRAT.
+    uint32 a, b, c, d;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    bsp_node = 0;
+    acpi_cpu_to_node((uint8)(b >> 24), &bsp_node);
+
+    for (uint32 i = 0; i < data_counter_mmap_entries; i++) {
+        if (map[i].type != E820_TYPE_FREE) continue;
+        uint64 base = map[i].base;
+        uint64 end = base + map[i].length;
+        if (naff == 0) {                    // no SRAT: one node, node 0
+            pool_add(0, base, end);
+            continue;
+        }
+        for (uint32 j = 0; j < naff; j++) {
+            uint64 sb = aff[j].base;
+            uint64 se = sb + aff[j].length;
+            uint64 lo = base > sb ? base : sb;
+            uint64 hi = end < se ? end : se;
+            if (lo >= hi) continue;
+            if (aff[j].flags & (SRAT_HOT_PLUG | SRAT_NON_VOLATILE)) {
+                kprint_long2hex(lo, " MEM: SRAT range hot-pluggable or non-volatile, not used, to ");
+                kprint_long2hex(hi, "\n");
+                continue;
+            }
+            pool_add(aff[j].proximity_domain, lo, hi);
+        }
+    }
+
+    for (uint32 i = 0; i < pool_count; i++) {
+        kprint("MEM: node ");
+        kprint_dec(pools[i].node);
+        kprint(" pool ");
+        kprint_dec(pools[i].bytes >> 20);
+        kprint(" MB in ");
+        kprint_dec(pools[i].nranges);
+        kprint(" range(s), first ");
+        kprint_long2hex(pools[i].r[0].next, "\n");
+    }
+    kprint("MEM: BSP node ");
+    kprint_dec(bsp_node);
+    putc('\n');
+    if (pool_count == 0) {
+        kprint("MEM: no usable RAM above the app slots for node pools\n");
+        mem_halt();
+    }
+}
+
+uint32 mem_bsp_node(void) {
+    return bsp_node;
+}
+
+uint32 mem_cpu_node(uint8 lapic_id) {
+    uint32 node;
+    if (acpi_cpu_to_node(lapic_id, &node)) return node;
+    return bsp_node;
+}
+
+// Pool for a node without memory: the pool at the smallest SLIT distance,
+// or the BSP's pool if there is no SLIT. Chosen once per node and logged.
+static NodePool *nearest_pool(uint32 node) {
+    for (uint32 i = 0; i < fallback_count; i++)
+        if (fallback_node[i] == node) return &pools[fallback_pool[i]];
+
+    NodePool *bsp = pool_of(bsp_node);
+    uint32 best = bsp ? (uint32)(bsp - pools) : 0;
+    uint32 best_dist = 0x100;
+    for (uint32 i = 0; i < pool_count; i++) {
+        uint8 dist;
+        if (acpi_distance(node, pools[i].node, &dist) && dist < best_dist) {
+            best_dist = dist;
+            best = i;
+        }
+    }
+    kprint("MEM: node ");
+    kprint_dec(node);
+    kprint(" has no memory pool, using node ");
+    kprint_dec(pools[best].node);
+    if (best_dist < 0x100) {
+        kprint(" (SLIT distance ");
+        kprint_dec(best_dist);
+        kprint(")\n");
+    } else {
+        kprint(" (no SLIT: BSP node)\n");
+    }
+    if (fallback_count < MAX_NUMA_NODES) {
+        fallback_node[fallback_count] = node;
+        fallback_pool[fallback_count] = best;
+        fallback_count++;
+    }
+    return &pools[best];
+}
+
+// Allocate n contiguous pages on NUMA node `node` (proximity domain).
+// A node SRAT does not describe (PCI_NUMA_UNKNOWN, THREAD_NUMA_UNKNOWN)
+// means the BSP's node. A node without memory uses the nearest node.
+// Never returns 0: halts when the node's pool is full.
+uint64 alloc_pages_node(uint32 node, uint32 n) {
+    if (pool_count == 0) {
+        kprint("MEM: alloc_pages_node before mem_numa_init\n");
+        mem_halt();
+    }
+    if (node == 0xFFFFFFFFu) node = bsp_node;
+    NodePool *p = pool_of(node);
+    if (!p) p = nearest_pool(node);
+
+    uint64 size = (uint64)n * 4096;
+    for (uint32 i = 0; n > 0 && i < p->nranges; i++) {
+        PoolRange *r = &p->r[i];
+        if (r->end - r->next < size) continue;
+        uint64 addr = r->next;
+        r->next += size;
+        return addr;
+    }
+    kprint("MEM: alloc_pages_node(node ");
+    kprint_dec(p->node);
+    kprint(", ");
+    kprint_dec(n);
+    kprint(" pages) failed\n");
+    mem_halt();
+    return 0;
+}
+
+int mem_addr_node(uint64 addr, uint32 *node_out) {
+    uint32 naff = 0;
+    const ACPINumaMemAffinity *aff = acpi_memory_affinities(&naff);
+    for (uint32 i = 0; i < naff; i++) {
+        if (addr >= aff[i].base && addr - aff[i].base < aff[i].length) {
+            *node_out = aff[i].proximity_domain;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+uint32 mem_pool_count(void) {
+    return pool_count;
+}
+
+// Pool i: node, total bytes, bytes used.
+void mem_pool_info(uint32 i, uint32 *node, uint64 *bytes, uint64 *used) {
+    *node = pools[i].node;
+    *bytes = pools[i].bytes;
+    uint64 free = 0;
+    for (uint32 j = 0; j < pools[i].nranges; j++)
+        free += pools[i].r[j].end - pools[i].r[j].next;
+    *used = pools[i].bytes - free;
 }
 
 // Allocate 64KB BSP stack from high memory, return stack top

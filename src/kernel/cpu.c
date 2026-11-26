@@ -35,7 +35,8 @@ void cpu_init(void) {
         percpu[i].lapic_id = cpu_lapic_ids[i];
         percpu[i].cr3 = (uint64)PML4T_LOCATION;
         if (i > 0) {
-            uint64 base = alloc_pages(AP_STACK_SIZE / 4096);
+            uint64 base = alloc_pages_node(mem_cpu_node(percpu[i].lapic_id),
+                                           AP_STACK_SIZE / 4096);
             percpu[i].stack_top = base + AP_STACK_SIZE;
             ap_user_alloc(i);   // ring 3 stack and private data region
         }

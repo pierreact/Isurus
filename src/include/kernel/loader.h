@@ -17,6 +17,9 @@ extern uint64 ap_entry_addrs[MAX_CPUS];
 // one AP. Called once per AP; a launch never allocates.
 void ap_user_alloc(uint32 cpu_idx);
 
+// Physical address of the private data region of one AP (0 for the BSP).
+uint64 ap_data_region(uint32 cpu_idx);
+
 // Prepare cpu_idx for a ring 3 launch: zero its data region and publish
 // it in thread_meta[cpu_idx]. Cannot fail.
 void ap_user_prepare(uint32 cpu_idx);
