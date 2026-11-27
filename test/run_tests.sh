@@ -198,6 +198,8 @@ check "VGA page uncacheable" "MEM: page type VGA 0xB8000: UC$"
 # Test: paging_init maps E820 RAM with large pages (2 MB pages present;
 # the default QEMU CPU has no 1 GB pages).
 check "RAM mapped with 2 MB pages" "PAGING: RAM .* 2M [1-9]"
+# Test: -m 2G needs 6 tables (PML4, PDPT, 2 PD, PT for 0-2 MB, PT for the RAM tail).
+check "Paging uses 6 tables" "PAGING: RAM .*, tables 6 "
 
 # Test: TSS and SYSCALL infrastructure initialized during boot
 check "TSS loaded" "TSS: BSP TSS loaded"
