@@ -389,7 +389,7 @@ A rescheduled thread keeps its original shared memory mappings at the same virtu
 
 ## Cluster memory model
 
-A cluster is modeled as additional NUMA nodes with higher latency. From the scheduler's perspective, a remote machine is just another NUMA domain - same abstraction, different latency numbers.
+A cluster is modeled as additional NUMA nodes, each with its own cores and memory, at a higher latency. One process runs threads on cores of several machines, as it would on several NUMA nodes of one machine. For thread placement, a remote machine is another NUMA domain: same abstraction, different latency numbers.
 
 - Inter-node communication goes over the dedicated NIC on BSP (layer 2).
 - Management traffic goes over the separate management NIC on BSP (TCP/IP).

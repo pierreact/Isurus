@@ -4,7 +4,7 @@
 
 # Isurus - Zero-Interrupt NUMA Cluster
 
-A bare-metal research kernel for x86-64. Its direction is to run a cluster of machines as one NUMA computer: remote machines become NUMA nodes with higher latency, one process spans cores on several machines, and its threads exchange data through explicitly shared memory regions while their working memory stays local.
+A bare-metal research kernel for x86-64. Its direction is to run a cluster of machines as one NUMA computer: remote machines become NUMA nodes, with their cores and memory at higher latency, one process runs threads on cores of several machines, and its threads exchange data through explicitly shared memory regions while their working memory stays local.
 
 An asymmetric kernel: one control core runs the kernel and services, the other cores are compute cores that each run one pinned application thread with direct device access; the cluster target extends this to a NUMA-aware single system image.
 
@@ -35,7 +35,7 @@ The common thread: the OS gets in the way.
 
 The design Isurus is built towards. For what is implemented, see [What works today](#what-works-today).
 
-- **Cluster as NUMA topology.** Remote machines are just NUMA nodes with higher latency. Same abstraction, different numbers.
+- **Cluster as NUMA topology.** Each remote machine adds NUMA nodes, each with its own cores and memory, at a higher latency. One process runs threads on cores of several machines, as it would on several NUMA nodes of one machine. Same abstraction, different latency numbers.
 - **One thread per core, pinned.** No scheduling, no migration, no context switching. Placement is decided once at creation.
 - **One address space, explicit locality.** A process has one address space across all nodes. A thread's private memory (stack, working set, device mappings) is always on its local NUMA node. Threads exchange data through a shared region, mapped at the same virtual address in every thread. At start, each thread receives a locality map that tells, for every shared slice, whether it is on the same NUMA node, the same machine or a remote machine. A remote page of the shared region is fetched on demand: the access faults, and the BSP fetches the page from its owning node over a layer-2 link and maps it read-only ([architecture](docs/developer/architecture.md)).
 - **Single-writer coherence.** Each shared memory slice has exactly one writer, permanently. Ownership never transfers. No write contention by design.
@@ -190,7 +190,7 @@ A general-purpose OS pays for its generality with complexity and compromises. If
 
 ### Multi-node direction
 
-Separate from both hypotheses: a zero-interrupt, NUMA-first design across machines (see [Target design](#target-design)). A process keeps its working memory on its local node; processes on different nodes exchange data through the shared region; the locality map tells which addresses are remote. Remote memory does not replace local working memory. This is a research direction; its performance and practicality are not demonstrated.
+Separate from both hypotheses: a zero-interrupt, NUMA-first design across machines (see [Target design](#target-design)). Each thread keeps its working memory on its local node; threads of the same process on different nodes exchange data through the shared region; the locality map tells which addresses are remote. Remote memory does not replace local working memory. This is a research direction; its performance and practicality are not demonstrated.
 
 ### How the work is done
 
