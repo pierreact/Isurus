@@ -271,6 +271,8 @@ Each AP loads its own CR3, pointing to its own PML4T. This gives each thread a f
 
 One thread per core, no context switching. CR3 is loaded once during AP startup and never changes.
 
+Threads of the same process cannot access each other's private memory, whether they run on the same machine or on different machines. The shared region is the only path for exchanging data between threads. Reason: behaviour does not depend on placement, and an owner thread never pays for tracking writes to its private memory. Exposing private memory to other threads would require that tracking.
+
 Three virtual address zones per thread:
 
 ```
@@ -285,12 +287,14 @@ Virtual address space (per thread):
 |  - Device MMIO            |
 +---------------------------+
 | Shared region (user)      |  Mapped in ALL thread page tables at same VA.
+|  - Per-thread slices      |  Each thread's slice: writable by its owner,
+|                           |  read-only for all others.
 |  - Cross-thread data      |  Physical pages may span multiple NUMA nodes.
 |  - Coordination structs   |
 +---------------------------+
 ```
 
-Kernel and shared regions reuse the same physical page table pages across all PML4Ts. Only the private region's page table entries differ per thread. This keeps memory overhead small: ~16KB per thread (PML4T + private region page tables).
+Kernel and shared regions reuse the same physical page table pages across all PML4Ts, with one exception. Each slice of the shared region has its own aligned virtual window (2 MB or 1 GB). The leaf tables of every slice are shared, with R/W set. The upper-level page that holds the slice entries is one copy per thread: R/W=1 only for the thread's own slice, R/W=0 for the others. x86 allows a write only if R/W is set at every level. The private region's entries also differ per thread. This keeps memory overhead small: ~16KB per thread (PML4T + private region page tables).
 
 Private memory includes the thread's stack, local heap, and device MMIO (NICs, storage controllers assigned to the thread). All private allocations are physically on the thread's NUMA node.
 
@@ -321,7 +325,7 @@ Remote shared pages are fetched on demand via page faults. All DSM traffic goes 
 3. The AP's fault handler sends an IPI to BSP with the faulting address.
 4. BSP sends the request to the owning node over the inter-node NIC.
 5. The owning node sends back the 4KB page contents to BSP.
-6. BSP copies the page data into a pre-allocated frame on the faulting AP's NUMA node, updates the AP's page table to map it read-only, and sends an IPI to wake the AP.
+6. BSP copies the page data into a pre-allocated frame on the faulting AP's NUMA node, maps it in the slice's leaf page table (shared by every thread page table on this machine), and sends an IPI to wake the AP. The page is read-only for every local thread because the slice's writer is on another machine.
 7. The AP resumes the thread. The faulting instruction retries and succeeds.
 8. The page is now cached locally. Writes require the coherence protocol (see below).
 
