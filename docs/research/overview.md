@@ -65,18 +65,18 @@ bend later:
   preemption, no continuous scheduler, no migration policy to
   tune or get wrong.
 
-What these choices exclude:
+What these choices exclude (target design; the last column is the state of the code today):
 
-| Excluded bug class | By-construction reason |
-|---|---|
-| Data-path allocator corruption | No runtime allocator on APs |
-| Race conditions on AP data | One thread per core, no context switch |
-| Lock contention / priority inversion | No locks on the AP data path |
-| Cache-coherence races on shared data | Single-writer; readers never contend |
-| Cross-thread memory corruption | Per-thread CR3 isolation |
-| Interrupt-timing Heisenbugs | Polled I/O, no IRQs on AP data path |
-| Scheduler-induced non-determinism | Placement is static once decided |
-| TLB shootdown storms | Per-thread page tables, no cross-CPU invals on normal ops |
+| Excluded bug class | By-construction reason | Today |
+|---|---|---|
+| Data-path allocator corruption | No runtime allocator on APs | Not enforced: SYS_KMALLOC is reachable from APs (one syscall table for all CPUs) |
+| Race conditions on AP data | One thread per core, no context switch | Partly: per-core data region in ThreadMeta; an app's .data/.bss is shared by all its cores |
+| Lock contention / priority inversion | No locks on the AP data path | Holds (no locks exist), but AP syscalls run kernel code on shared state with no synchronization |
+| Cache-coherence races on shared data | Single-writer; readers never contend | Not implemented: no shared region yet |
+| Cross-thread memory corruption | Per-thread CR3 isolation | Not enforced: one page table for all CPUs, User bit on every page |
+| Interrupt-timing Heisenbugs | Polled I/O, no IRQs on AP data path | Partly: device IRQs go to the BSP only; AP ring-3 code runs with IF=1 |
+| Scheduler-induced non-determinism | Placement is static once decided | Holds: one pinned thread per AP |
+| TLB shootdown storms | Per-thread page tables, no cross-CPU invals on normal ops | Holds: mappings never change at run time, no shootdowns issued |
 
 The price is honest: the system must be *sized* in advance. An
 application declares how much memory its per-core thread will use;

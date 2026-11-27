@@ -73,7 +73,7 @@ for the canonical mode definitions.
 - BSP NIC inventory:
   - Management NIC: full TCP/IP stack for SSH, telnet, and maintenance. Required in both modes.
   - Inter-node NIC `(Cluster)`: dedicated for cluster communication between nodes (layer 2). Single-node deployments do not use this NIC.
-- Ring 3 provides memory isolation. Threads cannot corrupt kernel memory or each other (see Thread memory isolation).
+- Target: per-thread page tables give memory isolation. Threads cannot corrupt kernel memory or each other (see Thread memory isolation). Today ring 3 is a privilege level only: all CPUs share one page table with the User bit on every page, so ring-3 code can write kernel memory and other threads' memory.
 - Device MMIO (NICs, storage controllers) is mapped into each thread's address space by the kernel via page tables. Threads access devices directly via polling without syscalls (see Device assignment).
 
 See `(Cluster)` sections below for the multi-node memory model and DSM architecture.

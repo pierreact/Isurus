@@ -27,9 +27,9 @@ Scaling a workload beyond one machine today means rewriting it as a distributed 
 - **Linux + MPI:** explicit message passing. You serialize, send, deserialize. Your algorithm disappears under communication boilerplate.
 - **Kubernetes / microservices:** network boundaries everywhere. Every cross-node interaction is an RPC with serialization overhead and failure modes.
 - **RDMA (InfiniBand):** gives you remote memory reads, but not remote execution. You still manage two separate address spaces and coordinate manually.
-- **Historical DSM (Treadmarks, Ivy):** bolted on top of a general-purpose OS. Context switches, syscall overhead, full networking stack in the data path. They proved the concept but couldn't deliver the performance.
+- **Historical DSM (Ivy, TreadMarks):** page-based shared memory over a network. The main costs were false sharing at page granularity and the number of coherence messages, both paid at network latency, not DRAM latency. TreadMarks added lazy release consistency and multiple writers per page to reduce them (Keleher et al., USENIX Winter 1994). Removing the OS from the data path does not remove these costs.
 
-The common thread: the OS gets in the way.
+The common thread for the first three: the OS and the programming model get in the way. For DSM, network latency and page-size coherence do.
 
 ## Target design
 
@@ -100,7 +100,9 @@ and handles interrupts -- it is also the only core that ever sees a
 syscall.** Every other core is an AP: exactly one pinned ring-3
 thread for its lifetime, no scheduling, no migration, no context
 switching, no kernel-mode work in the data path. Placement is the
-only scheduling decision.
+only scheduling decision. (Today AP apps still send and receive
+packets through syscalls, SYS_NIC_SEND and SYS_NIC_RECV; ring-3
+MMIO polling is planned.)
 
 A single process spans multiple cores -- one thread per AP -- and
 in the planned cluster mode spans cores across multiple machines. Each
@@ -123,7 +125,7 @@ The kernel is meant to be **as small and basic as possible**, retaining maximum 
 
 Kernel bugs compound silently -- a bit-flip deep in the kernel may sit dormant for years until a layout shift brings it to a live code path. Runtime checks (asserts, sanitizers, watchdogs) only help on the build that caused the damage, not on the build where it finally fires. So Isurus accepts several up-front tradeoffs -- static sizing, one-thread-per-core, no context switching on APs, single-writer shared memory, per-thread address spaces, polled I/O only, placement as the only scheduling decision -- and in exchange excludes whole classes of bug (data-path allocator corruption, AP data races, lock contention, cache-coherence races, interrupt-timing Heisenbugs, scheduler non-determinism). You pay by sizing your working set ahead of time; you gain a system that is correct by construction within its envelope.
 
-See [Research Overview, section 2](docs/research/overview.md) for the full doctrine and what each design choice removes.
+See [Research Overview, section 2](docs/research/overview.md) for the full doctrine, what each design choice removes, and which exclusions the code enforces today.
 
 **Single node (target):** a low-jitter, ultra-low-latency execution environment. One thread per core, no interrupts on application cores, CPUs at max frequency, direct device polling. Use cases: high-frequency trading, packet processing, real-time sensor ingestion, any workload where deterministic per-core execution matters.
 
