@@ -70,8 +70,8 @@ Logs (logs/, gitignored): compile.log, compile_logs.log, serial.log, qemu.log, t
 - docs/project/todo.md: move completed items to Done
 
 ## State
-- Working: boot, ring-3 BSP shell (SYSCALL/SYSRET, TSS, cooperative tasks), FAT32, IDE, kmalloc, SMP AP bringup, ACPI (MADT/SRAT/SLIT/HPET/FADT/MCFG/DMAR/IVRS + AML _BBN/_PXM), PCI ECAM with NUMA proximity, virtio-net, NIC abstraction + per-numa/per-core assignment, per-CPU ThreadMeta, Q35
-- Not yet: AP ring-3 threads, per-thread page tables, clustering, DSM, DPDK, SPDK
+- Working: boot, ring-3 BSP shell (SYSCALL/SYSRET, TSS, cooperative tasks), FAT32, IDE, kmalloc, SMP AP bringup, ACPI (MADT/SRAT/SLIT/HPET/FADT/MCFG/DMAR/IVRS + AML _BBN/_PXM), PCI ECAM with NUMA proximity, virtio-net, NIC abstraction + per-numa/per-core assignment, per-CPU ThreadMeta, Q35, AP ring-3 threads (flat binaries, one shared page table)
+- Not yet: per-thread page tables, clustering, DSM, DPDK, SPDK
 
 ## Revisit later
 - BSP kmalloc is page-multiple first-fit, no subpage pool. If small allocations dominate, add a slab/subpage pool inside one kmalloc'd page (O(1) vs O(num_blocks)).

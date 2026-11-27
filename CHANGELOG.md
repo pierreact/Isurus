@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-11-27] - Docs: claims match the code
+
+### Fixed
+- README: historical DSM costs stated as false sharing at page granularity and coherence message volume at network latency (Keleher et al., USENIX Winter 1994), not the OS path.
+- README: AP apps use SYS_NIC_SEND/SYS_NIC_RECV today; ring-3 MMIO polling is planned.
+- hardware.md: x86 PCIe DMA is snooped on Intel and AMD unless No Snoop is set (Linux arch/x86 has no ARCH_HAS_SYNC_DMA_FOR_CPU); DDIO is Intel-specific and not required. Removed "Intel is the only brand".
+- architecture.md: ring-3 memory isolation marked as target; today one shared page table with the User bit on every page.
+- overview.md: the excluded bug class table has a "Today" column with the state of each class in the code.
+- CLAUDE.md: AP ring-3 threads listed as working (flat binaries, one shared page table), no longer under "Not yet".
+
 ## [2026-11-26] - License: Apache 2.0 with HFT condition; README revision
 
 ### Changed

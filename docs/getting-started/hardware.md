@@ -2,11 +2,11 @@
 
 ## Processor requirement: cache-coherent DMA
 
-This OS requires processors with cache-coherent DMA. To our knowledge, Intel is currently the only brand providing DMA cache-coherent CPUs. Any processor that supports cache-coherent DMA should work.
+This OS requires processors with cache-coherent DMA. On x86 (Intel and AMD), PCIe DMA is snooped by the CPU caches unless the device sets the PCIe No Snoop attribute; Linux relies on this and does no cache maintenance for DMA on x86 (no `ARCH_HAS_SYNC_DMA_FOR_CPU` in arch/x86). Intel DDIO (DMA writes into the last-level cache) is a separate, Intel-specific feature and is not required.
 
 ## What is cache-coherent DMA
 
-When a NIC DMAs packets into memory, the CPU cache may hold stale data at those addresses. On cache-coherent hardware (e.g. Intel), the cache controller snoops DMA transactions automatically: when the NIC writes to a physical address, any cached copy of that line is invalidated or updated before the CPU reads it.
+When a NIC DMAs packets into memory, the CPU cache may hold stale data at those addresses. On cache-coherent hardware (x86), the cache controller snoops DMA transactions automatically: when the NIC writes to a physical address, any cached copy of that line is invalidated or updated before the CPU reads it.
 
 The consequence: DMA buffers can live in normal write-back cacheable memory. Threads reading packet data get full cache performance with no manual coherence management.
 
