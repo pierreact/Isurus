@@ -4,7 +4,15 @@
 
 # Isurus - Zero-Interrupt NUMA Cluster
 
-A bare-metal OS kernel for x86-64. The idea: treat a cluster of machines as one big NUMA computer, where a single process spans multiple physical nodes and threads share memory transparently across machines.
+A bare-metal research kernel for x86-64. Its direction is to run a cluster of machines as one NUMA computer: remote machines become NUMA nodes, with their cores and memory at higher latency, one process runs threads on cores of several machines, and its threads exchange data through explicitly shared memory regions while their working memory stays local.
+
+An asymmetric kernel: one control core runs the kernel and services, the other cores are compute cores that each run one pinned application thread with direct device access; the cluster target extends this to a NUMA-aware single system image.
+
+> **Status (single node only).** Today the kernel boots from a BIOS ISO and is tested in QEMU Q35. CPU 0 runs the kernel, all interrupts and a cooperative ring-3 shell; every other core runs one pinned ring-3 thread. ACPI NUMA topology discovery, PCIe enumeration and a virtio-net driver work.
+>
+> **Not yet implemented:** multi-node clustering, cross-node shared memory (DSM), DPDK-style NIC access (application threads reach the NIC through a syscall passthrough today), SPDK-style storage access. No latency or jitter comparison with Linux exists yet.
+>
+> Details: [What works today](#what-works-today), [Roadmap](#roadmap).
 
 ## Why "Isurus"
 
@@ -23,11 +31,13 @@ Scaling a workload beyond one machine today means rewriting it as a distributed 
 
 The common thread: the OS gets in the way.
 
-## What Isurus does differently
+## Target design
 
-- **Cluster as NUMA topology.** Remote machines are just NUMA nodes with higher latency. Same abstraction, different numbers.
+The design Isurus is built towards. For what is implemented, see [What works today](#what-works-today).
+
+- **Cluster as NUMA topology.** Each remote machine adds NUMA nodes, each with its own cores and memory, at a higher latency. One process runs threads on cores of several machines, as it would on several NUMA nodes of one machine. Same abstraction, different latency numbers.
 - **One thread per core, pinned.** No scheduling, no migration, no context switching. Placement is decided once at creation.
-- **Distributed shared memory.** Threads share a single address space across machines. Access a remote page and you get a page fault that fetches it over layer 2. Transparent to the application.
+- **One address space, explicit locality.** A process has one address space across all nodes. A thread's private memory (stack, working set, device mappings) is always on its local NUMA node and visible only to that thread. Threads exchange data through a shared region, mapped at the same virtual address in every thread. At start, each thread receives a locality map that tells, for every shared slice, whether it is on the same NUMA node, the same machine or a remote machine. A remote page of the shared region is fetched on demand: the access faults, and the BSP fetches the page from its owning node over a layer-2 link and maps it read-only ([architecture](docs/developer/architecture.md)).
 - **Single-writer coherence.** Each shared memory slice has exactly one writer, permanently. Ownership never transfers. No write contention by design.
 - **Direct device access.** NICs and storage controllers are mapped into userspace. Threads poll devices directly (DPDK-style for NICs, SPDK planned for storage). No syscalls for I/O.
 - **No dynamic power management.** P-states locked to max frequency, no deep C-states (C1/HLT is the floor), T-states ignored. Cool your hardware appropriately.
@@ -93,7 +103,7 @@ switching, no kernel-mode work in the data path. Placement is the
 only scheduling decision.
 
 A single process spans multiple cores -- one thread per AP -- and
-in cluster mode spans multiple cores across multiple machines. Each
+in the planned cluster mode spans cores across multiple machines. Each
 thread reaches its memory and its NIC on its own locality: local
 DRAM through the on-die memory controller, local NIC through the
 local PCIe root. No cross-NUMA hop, no network round-trip, no
@@ -115,16 +125,14 @@ Kernel bugs compound silently -- a bit-flip deep in the kernel may sit dormant f
 
 See [Research Overview, section 2](docs/research/overview.md) for the full doctrine and what each design choice removes.
 
-**Single node:** a hard real-time, ultra-low-latency execution environment. One thread per core, no interrupts on application cores, CPUs at max frequency, direct device polling. Use cases: high-frequency trading, packet processing, real-time sensor ingestion, any workload where deterministic per-core execution matters.
+**Single node (target):** a low-jitter, ultra-low-latency execution environment. One thread per core, no interrupts on application cores, CPUs at max frequency, direct device polling. Use cases: high-frequency trading, packet processing, real-time sensor ingestion, any workload where deterministic per-core execution matters.
 
-**Cluster:** heavy parallelism across dedicated hardware. A single process spans multiple machines, threads share memory transparently via DSM, each thread owns its core and its NIC. Use cases: large-scale graph processing, distributed in-memory databases, shared aggregation across hundreds of cores.
+**Cluster (target):** heavy parallelism across dedicated hardware. A single process spans multiple machines, threads exchange data through explicitly shared regions, each thread owns its core and its NIC. Use cases: large-scale graph processing, distributed in-memory databases, shared aggregation across hundreds of cores.
 
 ## What works today
 
-> The kernel currently runs on a single node. Multi-node clustering, DSM, DPDK, and SPDK are not yet implemented.
-
 - ISO-first BIOS boot flow (El Torito no-emulation boot via xorriso)
-- Boots on x86-64 (real hardware and QEMU Q35)
+- Boots on x86-64 QEMU Q35. Real hardware is the target: every change is checked for QEMU-specific behaviour and for what real Intel/AMD machines do differently, and a first bare-metal boot is planned ([Roadmap](#roadmap), milestone 4).
 - SMP: AP bringup via INIT-SIPI-SIPI
 - ACPI: MADT, SRAT, SLIT, HPET, FADT, MCFG, DMAR/IVRS parsing with query APIs
 - PCI device enumeration (PCIe ECAM via MCFG)
@@ -149,9 +157,60 @@ scripts/compile_qemu.sh
 - **[Architecture](docs/developer/architecture.md)** -- kernel design decisions and rationale
 - **[Full Documentation Index](docs/README.md)** -- all documentation organized by audience
 
+## Roadmap
+
+Milestones from the current single-node kernel to a first multi-node run. The first multi-node run is on bare metal; the hardware is not chosen yet. These are plans, not features. Full task list: [docs/project/todo.md](docs/project/todo.md).
+
+1. **Memory isolation on one node.** Supervisor-only kernel mappings, SMEP/SMAP and NX where the CPU supports them, one page table (CR3) per AP with private, shared and kernel zones ([architecture](docs/developer/architecture.md), "Thread memory isolation"), guard pages below stacks. No protection that adds cost on the AP data path: KPTI is not used. Until then all cores of an application share one address space.
+2. **AP kernel surface.** Syscalls not allowed on APs are refused, AP console output goes through a per-core ring drained by the BSP, user pointers are checked.
+3. **AP bringup and NIC queues.** Calibrated IPI delays, x2APIC for APIC IDs above 254, a trampoline page chosen from E820; one NIC queue pair per core instead of one shared queue per node.
+4. **Bare metal.** First boot on real hardware with the serial log recorded, and one driver for a real NIC, polled from ring 3 through mapped MMIO.
+5. **Single-node measurements.** Jitter, packet latency and memory locality measured against Linux tuned for the same workload, on the same machine, with raw data and scripts published. The P-state and C-state policy is implemented first.
+6. **Cluster design, before any cluster code.** Written consistency model, how write detection and remote invalidation fit the zero-interrupt rule, failure semantics (coordinator, partitions, replication granularity).
+7. **Cross-node shared memory.** Shared regions and the locality map on one node, a layer-2 link between nodes driven by the BSP, remote shared pages fetched on demand with single-writer coherence and invalidation.
+8. **First multi-node demonstration.** Two bare-metal nodes, read-mostly single-writer shared slices, one workload (shared aggregation or a connection table). The latency of each stage of a remote fetch is measured and the workload is compared with a message-passing or sharded baseline. Results are published whether they are positive or negative.
+
+Not yet placed in this order: the test harness rework, the BSP coordinator for threads spanning cores, the placement solver, page replication and failover, cross-node time synchronization (PTP), the DPDK-style NIC library beyond one driver, the SPDK-style storage library.
+
+## Research questions
+
+Isurus tests two separate hypotheses. Neither has been demonstrated.
+
+### 1. AI-assisted development changes the cost of building a specialised OS
+
+General-purpose operating systems dominate partly because an operating system is a very large amount of work. Specialised kernels existed long before AI coding tools (unikernels, exokernels, lightweight HPC kernels) and stayed niche, partly because of the supporting work around the core design: drivers, firmware tables, tests, documentation. Kernel work is also slow to debug: triple faults, early boot failures and little observability.
+
+The hypothesis: an engineer who defines the architecture and the specifications, and who directs and checks AI-generated work, can build and maintain a specialised kernel that would otherwise need a larger team. AI is used to speed up implementation, tests, diagnosis and supporting work; design, specifications and technical judgement stay with the engineer. Isurus is the experiment that tests whether this is practical for one engineer.
+
+### 2. A purpose-built OS can outperform a tuned general-purpose OS for one workload
+
+A general-purpose OS pays for its generality with complexity and compromises. If building an OS becomes cheaper, single-purpose systems designed around one workload become practical. The question is whether such a system performs better than a general-purpose OS configured for the same workload. This is an untested hypothesis, not a result.
+
+**Low-latency / HFT experiment.** The concrete test is a low-latency workload (high-frequency trading): can Isurus give lower latency and less jitter than Linux tuned for the same purpose, with CPU isolation, thread pinning and low-latency kernel and system configuration? The baseline is tuned Linux, not a default installation. This experiment is not implemented or measured yet.
+
+### Multi-node direction
+
+Separate from both hypotheses: a zero-interrupt, NUMA-first design across machines (see [Target design](#target-design)). Each thread keeps its working memory on its local node; threads of the same process on different nodes exchange data through the shared region; the locality map tells which addresses are remote. Remote memory does not replace local working memory. This is a research direction; its performance and practicality are not demonstrated.
+
+### How the work is done
+
+- The author designed the core architecture: the BSP/AP split, zero-interrupt polled APs at maximum frequency, the NUMA-first cluster model, explicit single-writer cross-node shared memory and static sizing. For implementation-level decisions the AI agent investigates and proposes options with trade-offs, and the author chooses. Decisions are recorded with their date and the options not taken (example: [docs/project/todo.md](docs/project/todo.md), app slot load address).
+- Before 2026, all code was written by the author. Since 2026, most code, tests, PR descriptions and documentation are written by an AI agent (Claude Code), under the project rules in [CLAUDE.md](CLAUDE.md): every plan states what relies on QEMU behaviour and what real hardware does differently, performance claims need measured data, and unclear requirements are asked about, not assumed.
+- Each change is a pull request that states the problem, the measured evidence, the change, the tests and what is not verified. The author reviews every pull request and merges it.
+- CI builds the kernel and boots it headless in QEMU on every pull request, with serial and network tests ([test/run_tests.sh](test/run_tests.sh)). Repository hooks require the devbox toolchain, a CHANGELOG entry for every code change, and ASCII-only text.
+- QEMU is the development and test environment. Real hardware is the target. No real-hardware boot log is in the repository yet.
+
+## History
+
+- **2012-2014: OS fundamentals.** Isurus started in 2012 as a hobby OS, to learn how a computer works below the OS abstraction: 64-bit initialisation, paging, interrupts. The first Git commit is from June 2013 ([15f4f1c](https://github.com/pierreact/Isurus/commit/15f4f1c481b8195311b9261f6904881bbe27aa8c)); 31 commits up to October 2014.
+- **2014-2026: dormant.** No commits from October 2014 to February 2026.
+- **2026-present: research OS.** Revived in February 2026 to investigate whether a purpose-built OS can give lower latency and less jitter than tuned Linux for HFT workloads, a zero-interrupt NUMA-first architecture, explicit shared memory across nodes with local working memory, and whether AI-assisted, specification-driven development makes this practical for one engineer (see [Research questions](#research-questions)). Development ran from February to April 2026 and resumed in November 2026. AI-assisted development started with the revival; the AI tool configuration (`CLAUDE.md`, Claude Code hooks) was kept out of the repository until 2026-11-20.
+
 ## License
 
-Dual licensed: AGPLv3 for non-commercial use, commercial license available. See [LICENSE](LICENSE).
+Apache License 2.0 with one permanent condition: production use by or on behalf of a high-frequency trading business requires a commercial license from the author. Every other use, including other commercial production use, is permitted under Apache 2.0. Because of this condition, Isurus is source-available, not open source. The exact terms and definitions are in [LICENSE](LICENSE). Commercial licenses: pierreact at gmail dot com.
+
+Outside code contributions are not accepted at this time. Issues and discussion are welcome.
 
 ## Contact
 
